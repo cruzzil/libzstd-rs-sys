@@ -167,8 +167,9 @@ unsafe fn AIO_fwriteSparse(
     if storedSkips > (1 as core::ffi::c_uint).wrapping_mul((1 as core::ffi::c_uint) << 30) {
         if fseek(
             file,
-            (1 as core::ffi::c_uint).wrapping_mul((1 as core::ffi::c_uint) << 30)
-                as core::ffi::c_long,
+            core::ffi::c_long::from(
+                (1 as core::ffi::c_uint).wrapping_mul((1 as core::ffi::c_uint) << 30),
+            ),
             SEEK_CUR,
         ) != 0
         {
@@ -220,7 +221,7 @@ unsafe fn AIO_fwriteSparse(
             .wrapping_add(nb0T.wrapping_mul(::core::mem::size_of::<size_t>()) as core::ffi::c_uint);
         if nb0T != seg0SizeT {
             let nbNon0ST = seg0SizeT.wrapping_sub(nb0T);
-            if fseek(file, storedSkips as core::ffi::c_long, SEEK_CUR) != 0 {
+            if fseek(file, core::ffi::c_long::from(storedSkips), SEEK_CUR) != 0 {
                 if g_display_prefs.displayLevel >= 1 {
                     fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
                 }
@@ -295,14 +296,14 @@ unsafe fn AIO_fwriteSparse(
         let mut restPtr = restStart;
         let restEnd = (buffer as *const core::ffi::c_char).add(bufferSize);
         assert!(restEnd > restStart && restEnd < restStart.add(::core::mem::size_of::<size_t>()));
-        while restPtr < restEnd && *restPtr as core::ffi::c_int == 0 {
+        while restPtr < restEnd && core::ffi::c_int::from(*restPtr) == 0 {
             restPtr = restPtr.offset(1);
         }
         storedSkips = storedSkips
             .wrapping_add(restPtr.offset_from(restStart) as core::ffi::c_long as core::ffi::c_uint);
         if restPtr != restEnd {
             let restSize = restEnd.offset_from(restPtr) as size_t;
-            if fseek(file, storedSkips as core::ffi::c_long, SEEK_CUR) != 0 {
+            if fseek(file, core::ffi::c_long::from(storedSkips), SEEK_CUR) != 0 {
                 if g_display_prefs.displayLevel >= 1 {
                     fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
                 }
@@ -379,7 +380,7 @@ unsafe fn AIO_fwriteSparseEnd(
         assert!((*prefs).sparseFileSupport > 0);
         if fseek(
             file,
-            storedSkips.wrapping_sub(1) as core::ffi::c_long,
+            core::ffi::c_long::from(storedSkips.wrapping_sub(1)),
             SEEK_CUR,
         ) != 0
         {
@@ -592,7 +593,7 @@ unsafe fn AIO_IOPool_init(
     (*ctx).file = core::ptr::null_mut();
 }
 unsafe fn AIO_IOPool_threadPoolActive(ctx: *mut IOPoolCtx_t) -> core::ffi::c_int {
-    (!((*ctx).threadPool).is_null() && (*ctx).threadPoolActive != 0) as core::ffi::c_int
+    core::ffi::c_int::from(!((*ctx).threadPool).is_null() && (*ctx).threadPoolActive != 0)
 }
 unsafe fn AIO_IOPool_lockJobsMutex(ctx: *mut IOPoolCtx_t) {
     if AIO_IOPool_threadPoolActive(ctx) != 0 {
