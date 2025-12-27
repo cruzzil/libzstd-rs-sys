@@ -1,4 +1,3 @@
-use core::arch::asm;
 use core::ffi::c_void;
 use core::ops::Range;
 use core::ptr::{self, NonNull};
@@ -2247,7 +2246,7 @@ fn ZSTD_decompressSequences(
     offset: Offset,
 ) -> Result<size_t, Error> {
     if dctx.bmi2 {
-        unsafe { ZSTD_decompressSequences_bmi2(dctx, dst, seqStart, nbSeq, offset) }
+        ZSTD_decompressSequences_bmi2(dctx, dst, seqStart, nbSeq, offset)
     } else {
         ZSTD_decompressSequences_default(dctx, dst, seqStart, nbSeq, offset)
     }
@@ -2261,7 +2260,7 @@ fn ZSTD_decompressSequencesSplitLitBuffer(
     offset: Offset,
 ) -> Result<size_t, Error> {
     if dctx.bmi2 {
-        unsafe { ZSTD_decompressSequencesSplitLitBuffer_bmi2(dctx, dst, seqStart, nbSeq, offset) }
+        ZSTD_decompressSequencesSplitLitBuffer_bmi2(dctx, dst, seqStart, nbSeq, offset)
     } else {
         ZSTD_decompressSequencesSplitLitBuffer_default(dctx, dst, seqStart, nbSeq, offset)
     }
@@ -2275,7 +2274,7 @@ fn ZSTD_decompressSequencesLong(
     offset: Offset,
 ) -> Result<size_t, Error> {
     if dctx.bmi2 {
-        unsafe { ZSTD_decompressSequencesLong_bmi2(dctx, dst, seqStart, nbSeq, offset) }
+        ZSTD_decompressSequencesLong_bmi2(dctx, dst, seqStart, nbSeq, offset)
     } else {
         ZSTD_decompressSequencesLong_default(dctx, dst, seqStart, nbSeq, offset)
     }

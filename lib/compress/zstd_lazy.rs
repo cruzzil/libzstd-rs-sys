@@ -1,4 +1,3 @@
-use core::arch::asm;
 #[repr(C)]
 pub struct optState_t {
     pub litFreq: *mut core::ffi::c_uint,

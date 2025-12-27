@@ -804,7 +804,7 @@ fn HUF_decompress1X1_usingDTable_internal(
 ) -> size_t {
     match flags & HUF_flags_bmi2 as i32 {
         0 => HUF_decompress1X1_usingDTable_internal_default(dst, src, DTable),
-        _ => unsafe { HUF_decompress1X1_usingDTable_internal_bmi2(dst, src, DTable) },
+        _ => HUF_decompress1X1_usingDTable_internal_bmi2(dst, src, DTable),
     }
 }
 
@@ -830,8 +830,7 @@ fn HUF_decompress4X1_usingDTable_internal(
             }
         }
 
-        // SAFETY: bmi2 is enabled.
-        unsafe { HUF_decompress4X1_usingDTable_internal_bmi2(dst, src, DTable) }
+        HUF_decompress4X1_usingDTable_internal_bmi2(dst, src, DTable)
     } else {
         HUF_decompress4X1_usingDTable_internal_default(dst, src, DTable)
     }
@@ -1637,8 +1636,7 @@ fn HUF_decompress4X2_usingDTable_internal(
             }
         }
 
-        // SAFETY: the bmi2 feature is enabled.
-        unsafe { HUF_decompress4X2_usingDTable_internal_bmi2(dst, src, DTable) }
+        HUF_decompress4X2_usingDTable_internal_bmi2(dst, src, DTable)
     } else {
         HUF_decompress4X2_usingDTable_internal_default(dst, src, DTable)
     }
