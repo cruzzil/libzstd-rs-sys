@@ -873,8 +873,8 @@ unsafe fn analyze_entropy_internal(
     let mut wksp = [0u32; HUF_CTABLE_WORKSPACE_SIZE_U32];
     let huffLog = 11;
     let mut maxNbBits = HUF_buildCTable_wksp(
-        hufTable.as_mut_ptr(),
-        countLit.as_mut_ptr(),
+        &mut hufTable,
+        &countLit,
         255,
         huffLog,
         wksp.as_mut_ptr() as *mut core::ffi::c_void,
@@ -893,8 +893,8 @@ unsafe fn analyze_entropy_internal(
         }
         ZDICT_flatLit(&mut countLit); // replace distribution by a fake "mostly flat but still compressible" distribution, that HUF_writeCTable can encode
         maxNbBits = HUF_buildCTable_wksp(
-            hufTable.as_mut_ptr(),
-            countLit.as_mut_ptr(),
+            &mut hufTable,
+            &countLit,
             255,
             huffLog,
             wksp.as_mut_ptr() as *mut core::ffi::c_void,
@@ -963,7 +963,7 @@ unsafe fn analyze_entropy_internal(
     let hhSize = HUF_writeCTable_wksp(
         dstPtr as *mut core::ffi::c_void,
         maxDstSize,
-        hufTable.as_mut_ptr(),
+        &hufTable,
         255,
         huffLog,
         wksp.as_mut_ptr() as *mut core::ffi::c_void,
