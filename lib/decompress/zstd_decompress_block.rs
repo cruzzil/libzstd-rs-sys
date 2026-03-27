@@ -1,4 +1,6 @@
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use core::arch::asm;
+
 use core::ffi::c_void;
 use core::ops::Range;
 use core::ptr::{self, NonNull};
@@ -2210,7 +2212,7 @@ fn ZSTD_decompressSequencesLong_default(
 }
 
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "bmi2"))]
-fn ZSTD_decompressSequences_bmi2(
+unsafe fn ZSTD_decompressSequences_bmi2(
     dctx: &mut ZSTD_DCtx,
     dst: Writer<'_>,
     seqStart: &[u8],
@@ -2221,7 +2223,7 @@ fn ZSTD_decompressSequences_bmi2(
 }
 
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "bmi2"))]
-fn ZSTD_decompressSequencesSplitLitBuffer_bmi2(
+unsafe fn ZSTD_decompressSequencesSplitLitBuffer_bmi2(
     dctx: &mut ZSTD_DCtx,
     dst: Writer<'_>,
     seqStart: &[u8],
@@ -2232,7 +2234,7 @@ fn ZSTD_decompressSequencesSplitLitBuffer_bmi2(
 }
 
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "bmi2"))]
-fn ZSTD_decompressSequencesLong_bmi2(
+unsafe fn ZSTD_decompressSequencesLong_bmi2(
     dctx: &mut ZSTD_DCtx,
     dst: Writer<'_>,
     seqStart: &[u8],
@@ -2250,6 +2252,7 @@ fn ZSTD_decompressSequences(
     offset: Offset,
 ) -> Result<size_t, Error> {
     if dctx.bmi2 {
+        // SAFETY: bmi2 is enabled.
         unsafe { ZSTD_decompressSequences_bmi2(dctx, dst, seqStart, nbSeq, offset) }
     } else {
         ZSTD_decompressSequences_default(dctx, dst, seqStart, nbSeq, offset)
@@ -2264,6 +2267,7 @@ fn ZSTD_decompressSequencesSplitLitBuffer(
     offset: Offset,
 ) -> Result<size_t, Error> {
     if dctx.bmi2 {
+        // SAFETY: bmi2 is enabled.
         unsafe { ZSTD_decompressSequencesSplitLitBuffer_bmi2(dctx, dst, seqStart, nbSeq, offset) }
     } else {
         ZSTD_decompressSequencesSplitLitBuffer_default(dctx, dst, seqStart, nbSeq, offset)
@@ -2278,6 +2282,7 @@ fn ZSTD_decompressSequencesLong(
     offset: Offset,
 ) -> Result<size_t, Error> {
     if dctx.bmi2 {
+        // SAFETY: bmi2 is enabled.
         unsafe { ZSTD_decompressSequencesLong_bmi2(dctx, dst, seqStart, nbSeq, offset) }
     } else {
         ZSTD_decompressSequencesLong_default(dctx, dst, seqStart, nbSeq, offset)

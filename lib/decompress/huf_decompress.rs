@@ -599,7 +599,7 @@ fn HUF_decompress4X1_usingDTable_internal_body(
 }
 
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "bmi2"))]
-fn HUF_decompress4X1_usingDTable_internal_bmi2(
+unsafe fn HUF_decompress4X1_usingDTable_internal_bmi2(
     dst: Writer<'_>,
     src: &[u8],
     DTable: &DTable,
@@ -802,7 +802,7 @@ unsafe fn HUF_decompress4X1_usingDTable_internal_fast(
 }
 
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "bmi2"))]
-fn HUF_decompress1X1_usingDTable_internal_bmi2(
+unsafe fn HUF_decompress1X1_usingDTable_internal_bmi2(
     dst: Writer<'_>,
     src: &[u8],
     DTable: &DTable,
@@ -1426,7 +1426,7 @@ fn HUF_decompress4X2_usingDTable_internal_body(
 }
 
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "bmi2"))]
-fn HUF_decompress4X2_usingDTable_internal_bmi2(
+unsafe fn HUF_decompress4X2_usingDTable_internal_bmi2(
     dst: Writer<'_>,
     src: &[u8],
     DTable: &DTable,
