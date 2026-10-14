@@ -11,13 +11,14 @@ pub const HUF_WORKSPACE_SIZE: usize = (8 << 10) + 512;
 pub(crate) const HUF_TABLELOG_MAX: usize = 12;
 /// Default tableLog value when none specified
 pub(crate) const HUF_TABLELOG_DEFAULT: u32 = 11;
-pub(crate) const HUF_SYMBOLVALUE_MAX: u32 = 255;
+pub(crate) const HUF_SYMBOLVALUE_MAX: u32 = HUF_SYMBOLVALUE_MAX_U8 as u32;
+pub(crate) const HUF_SYMBOLVALUE_MAX_U8: u8 = 255;
 
 pub(crate) const HUF_CTABLE_WORKSPACE_SIZE_U32: usize =
     (4 * (HUF_SYMBOLVALUE_MAX as usize + 1)) + 192;
 
 pub(crate) const HUF_CTABLE_WORKSPACE_SIZE: usize =
-    HUF_CTABLE_WORKSPACE_SIZE_U32 * core::mem::size_of::<u32>();
+    HUF_CTABLE_WORKSPACE_SIZE_U32 * size_of::<u32>();
 
 /// Absolute limit of [`HUF_MAX_TABLELOG`]. Beyond that value, code does not work
 pub(crate) const HUF_TABLELOG_ABSOLUTEMAX: usize = 12;
@@ -30,7 +31,7 @@ pub(crate) const HUF_CTABLEBOUND: usize = 129;
 
 pub(crate) type HUF_CElt = size_t;
 
-pub(crate) const fn HUF_CTABLE_SIZE_ST(maxSymbolValue: usize) -> usize {
+pub const fn HUF_CTABLE_SIZE_ST(maxSymbolValue: usize) -> usize {
     (maxSymbolValue) + 2 /* Use tables of size_t, for proper alignment */
 }
 
@@ -47,21 +48,63 @@ pub(crate) const HUF_flags_disableFast: core::ffi::c_uint = 32;
 
 pub(crate) const HUF_OPTIMAL_DEPTH_THRESHOLD: core::ffi::c_int = ZSTD_btultra as core::ffi::c_int;
 
-pub(crate) type HUF_repeat = core::ffi::c_uint;
-/// Cannot use the previous table
-pub(crate) const HUF_repeat_none: HUF_repeat = 0;
-/// Can use the previous table but it must be checked. Note : The previous table must have been constructed by `HUF_compress{1, 4}X_repeat`
-pub(crate) const HUF_repeat_check: HUF_repeat = 1;
-/// Can use the previous table and it is assumed to be valid
-pub(crate) const HUF_repeat_valid: HUF_repeat = 2;
+#[repr(u32)]
+#[derive(Copy, Clone, PartialEq, Eq, Default)]
+pub enum HUF_repeat {
+    /// Cannot use the previous table
+    #[default]
+    None = 0,
+    /// Can use the previous table but it must be checked.
+    ///
+    /// Note: the previous table must have been constructed by `HUF_compress{1,4}X_repeat`.
+    Check = 1,
+    /// Can use the previous table and it is assumed to be valid
+    Valid = 2,
+}
 
 pub(crate) const HUF_READ_STATS_WORKSPACE_SIZE_U32: usize =
     FSE_DECOMPRESS_WKSP_SIZE_U32(6, HUF_TABLELOG_MAX - 1);
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default)]
 #[repr(C)]
 pub(crate) struct HUF_CTableHeader {
     pub(crate) tableLog: u8,
     pub(crate) maxSymbolValue: u8,
-    pub(crate) unused: [u8; core::mem::size_of::<usize>() - 2],
+    pub(crate) unused: [u8; size_of::<usize>() - 2],
+}
+
+impl HUF_CTableHeader {
+    pub(crate) fn new(tableLog: u32, maxSymbolValue: u8) -> Self {
+        debug_assert!(tableLog < 256);
+
+        Self {
+            tableLog: tableLog as u8,
+            maxSymbolValue,
+            unused: [0; _],
+        }
+    }
+}
+
+/// A Huffman compression table: a header, followed by one entry per symbol.
+#[derive(Copy, Clone)]
+#[repr(C)]
+pub struct CTable {
+    pub(crate) header: HUF_CTableHeader,
+    pub(crate) elements: SymbolTable,
+}
+
+/// The per-symbol part of a [`CTable`]: everything after the header.
+pub(crate) type SymbolTable = [HUF_CElt; HUF_SYMBOLVALUE_MAX as usize + 1];
+
+const _: () = assert!(size_of::<CTable>() == HUF_CTABLE_SIZE_ST(255) * size_of::<HUF_CElt>());
+const _: () = assert!(align_of::<CTable>() == align_of::<HUF_CElt>());
+
+// not derived: `[T; N]: Default` only exists for `N <= 32`, and `elements` is longer
+impl Default for CTable {
+    fn default() -> Self {
+        Self {
+            header: HUF_CTableHeader::default(),
+            elements: [0; _],
+        }
+    }
 }

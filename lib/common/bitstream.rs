@@ -8,7 +8,16 @@ use crate::lib::polyfill::unlikely;
 
 pub(crate) type BitContainerType = usize;
 
+pub(crate) const STREAM_ACCUMULATOR_MIN_32: u32 = 25;
+pub(crate) const STREAM_ACCUMULATOR_MIN_64: u32 = 57;
+pub(crate) const STREAM_ACCUMULATOR_MIN: u32 = match size_of::<usize>() {
+    4 => STREAM_ACCUMULATOR_MIN_32,
+    8 => STREAM_ACCUMULATOR_MIN_64,
+    _ => unreachable!(),
+};
+
 #[repr(C)]
+#[derive(Default)]
 pub(crate) struct BIT_CStream_t {
     // FIXME make all fields private to this module
     pub(crate) bitContainer: BitContainerType,
@@ -18,86 +27,122 @@ pub(crate) struct BIT_CStream_t {
     pub(crate) endPtr: *mut core::ffi::c_char,
 }
 
-#[inline]
-pub(crate) unsafe fn BIT_initCStream(
-    bitC: *mut BIT_CStream_t,
-    startPtr: *mut core::ffi::c_void,
-    dstCapacity: size_t,
-) -> size_t {
-    (*bitC).bitContainer = 0;
-    (*bitC).bitPos = 0;
-    (*bitC).startPtr = startPtr as *mut core::ffi::c_char;
-    (*bitC).ptr = (*bitC).startPtr;
-    (*bitC).endPtr = ((*bitC).startPtr)
-        .add(dstCapacity)
-        .offset(-(::core::mem::size_of::<BitContainerType>() as core::ffi::c_ulong as isize));
-    if dstCapacity <= ::core::mem::size_of::<BitContainerType>() {
-        return Error::dstSize_tooSmall.to_error_code();
+impl BIT_CStream_t {
+    #[inline]
+    pub(crate) fn new(
+        startPtr: *mut core::ffi::c_void,
+        dstCapacity: size_t,
+    ) -> Result<Self, Error> {
+        if dstCapacity <= size_of::<BitContainerType>() {
+            return Err(Error::dstSize_tooSmall);
+        }
+
+        let startPtr = startPtr as *mut core::ffi::c_char;
+        Ok(BIT_CStream_t {
+            bitContainer: 0,
+            bitPos: 0,
+            startPtr,
+            ptr: startPtr,
+            endPtr: startPtr
+                .wrapping_add(dstCapacity)
+                .wrapping_sub(size_of::<BitContainerType>()),
+        })
     }
-    0
+
+    /// Add up to 31 bits into the bit stream.
+    ///
+    /// Note: does not check for register overflow!
+    #[inline]
+    pub(crate) fn add_bits(&mut self, value: BitContainerType, nbBits: core::ffi::c_uint) {
+        debug_assert!(nbBits < BIT_MASK_SIZE as u32);
+        debug_assert!(nbBits + self.bitPos < BitContainerType::BITS);
+        self.bitContainer |= BIT_getLowerBits(value, nbBits) << self.bitPos;
+        self.bitPos = self.bitPos.wrapping_add(nbBits);
+    }
+
+    /// Works only if `value` is clean, meaning all high bits above `nbBits` are 0.
+    #[inline]
+    fn add_bits_fast(&mut self, value: BitContainerType, nbBits: core::ffi::c_uint) {
+        debug_assert_eq!(value >> nbBits, 0);
+        debug_assert!(nbBits + self.bitPos < BitContainerType::BITS);
+        self.bitContainer |= value << self.bitPos;
+        self.bitPos = self.bitPos.wrapping_add(nbBits);
+    }
+
+    /// Safe version: check for buffer overflow, and prevent it.
+    /// The buffer overflow is not signaled, instead it will be revealed later on using [`BIT_closeCStream`].
+    ///
+    /// Assumption: `bitContainer` has not overflowed
+    #[inline]
+    pub(crate) unsafe fn flush_bits(&mut self) {
+        let nbBytes = (self.bitPos >> 3) as size_t;
+        debug_assert!(self.bitPos < BitContainerType::BITS);
+        debug_assert!(self.ptr <= self.endPtr);
+        MEM_writeLEST(self.ptr as *mut core::ffi::c_void, self.bitContainer);
+        self.ptr = Ord::min(self.ptr.add(nbBytes), self.endPtr);
+        self.bitPos &= 7;
+        self.bitContainer >>= nbBytes * 8;
+    }
+
+    /// Unsafe version: does not check buffer overflow.
+    ///
+    /// Assumption: `bitContainer` has not overflowed
+    #[inline]
+    pub(crate) unsafe fn flush_bits_fast(&mut self) {
+        let nbBytes = (self.bitPos >> 3) as size_t;
+        debug_assert!(self.bitPos < BitContainerType::BITS);
+        debug_assert!(self.ptr <= self.endPtr);
+        MEM_writeLEST(self.ptr as *mut core::ffi::c_void, self.bitContainer);
+        self.ptr = self.ptr.add(nbBytes);
+        self.bitPos &= 7;
+        self.bitContainer >>= nbBytes * 8;
+    }
+
+    /// Close the bit stream.
+    ///
+    /// # Returns
+    ///
+    /// - The size of the stream in bytes
+    /// - 0 if it could not fit into `dstBuffer`
+    #[inline]
+    pub(crate) unsafe fn close(mut self) -> size_t {
+        self.add_bits_fast(1, 1);
+        self.flush_bits();
+        if self.ptr >= self.endPtr {
+            return 0; // overflow detected
+        }
+        self.ptr
+            .offset_from_unsigned(self.startPtr)
+            .wrapping_add((self.bitPos > 0) as usize)
+    }
 }
 
-static BIT_mask: [core::ffi::c_uint; 32] = [
-    0, 1, 3, 7, 0xf, 0x1f, 0x3f, 0x7f, 0xff, 0x1ff, 0x3ff, 0x7ff, 0xfff, 0x1fff, 0x3fff, 0x7fff,
-    0xffff, 0x1ffff, 0x3ffff, 0x7ffff, 0xfffff, 0x1fffff, 0x3fffff, 0x7fffff, 0xffffff, 0x1ffffff,
-    0x3ffffff, 0x7ffffff, 0xfffffff, 0x1fffffff, 0x3fffffff, 0x7fffffff,
-];
+const BIT_MASK_SIZE: usize = 32;
+
+/// Indexed by a `u8`, so the lookup needs no bounds check. Only the first [`BIT_MASK_SIZE`] entries are used.
+static BIT_mask: [core::ffi::c_uint; 256] = {
+    let mut mask = [u32::MAX; 256];
+    let mut i = 0;
+    while i < BIT_MASK_SIZE {
+        mask[i] = (1 << i) - 1;
+        i += 1;
+    }
+    mask
+};
 
 #[inline(always)]
-unsafe fn BIT_getLowerBits(bitContainer: BitContainerType, nbBits: u32) -> BitContainerType {
-    bitContainer & *BIT_mask.as_ptr().offset(nbBits as isize) as BitContainerType
-}
-
-#[inline]
-pub(crate) unsafe fn BIT_addBits(
-    bitC: *mut BIT_CStream_t,
-    value: BitContainerType,
-    nbBits: core::ffi::c_uint,
-) {
-    (*bitC).bitContainer |= BIT_getLowerBits(value, nbBits) << (*bitC).bitPos;
-    (*bitC).bitPos = ((*bitC).bitPos).wrapping_add(nbBits);
-}
-
-#[inline]
-unsafe fn BIT_addBitsFast(
-    bitC: *mut BIT_CStream_t,
-    value: BitContainerType,
-    nbBits: core::ffi::c_uint,
-) {
-    (*bitC).bitContainer |= value << (*bitC).bitPos;
-    (*bitC).bitPos = ((*bitC).bitPos).wrapping_add(nbBits);
-}
-
-#[inline]
-pub(crate) unsafe fn BIT_flushBits(bitC: *mut BIT_CStream_t) {
-    let nbBytes = ((*bitC).bitPos >> 3) as size_t;
-    MEM_writeLEST((*bitC).ptr as *mut core::ffi::c_void, (*bitC).bitContainer);
-    (*bitC).ptr = ((*bitC).ptr).add(nbBytes);
-    if (*bitC).ptr > (*bitC).endPtr {
-        (*bitC).ptr = (*bitC).endPtr;
+fn BIT_getLowerBits(bitContainer: BitContainerType, nbBits: u32) -> BitContainerType {
+    cfg_select! {
+        target_feature = "bmi2" => {
+            // With bmi2 the bzhi instruction can be used.
+            bitContainer & ((1 << nbBits) - 1)
+        }
+        _ => {
+            // At least on x86_64, the lookup table is faster without bmi2.
+            debug_assert!(nbBits < BIT_MASK_SIZE as u32);
+            bitContainer & BIT_mask[usize::from(nbBits as u8)] as BitContainerType
+        }
     }
-    (*bitC).bitPos &= 7;
-    (*bitC).bitContainer >>= nbBytes * 8;
-}
-
-#[inline]
-pub(crate) unsafe fn BIT_flushBitsFast(bitC: *mut BIT_CStream_t) {
-    let nbBytes = ((*bitC).bitPos >> 3) as size_t;
-    MEM_writeLEST((*bitC).ptr as *mut core::ffi::c_void, (*bitC).bitContainer);
-    (*bitC).ptr = ((*bitC).ptr).add(nbBytes);
-    (*bitC).bitPos &= 7;
-    (*bitC).bitContainer >>= nbBytes * 8;
-}
-
-#[inline]
-pub(crate) unsafe fn BIT_closeCStream(bitC: *mut BIT_CStream_t) -> size_t {
-    BIT_addBitsFast(bitC, 1, 1);
-    BIT_flushBits(bitC);
-    if (*bitC).ptr >= (*bitC).endPtr {
-        return 0;
-    }
-    (((*bitC).ptr).offset_from((*bitC).startPtr) as usize)
-        .wrapping_add(((*bitC).bitPos > 0) as usize)
 }
 
 /// Bitstream decoder
@@ -133,16 +178,6 @@ pub(crate) enum StreamStatus {
     Overflow = 3,
 }
 
-#[rustfmt::skip]
-static MASK: [u32; 32] = [
-    0,          1,         3,         7,         0xF,       0x1F,
-    0x3F,       0x7F,      0xFF,      0x1FF,     0x3FF,     0x7FF,
-    0xFFF,      0x1FFF,    0x3FFF,    0x7FFF,    0xFFFF,    0x1FFFF,
-    0x3FFFF,    0x7FFFF,   0xFFFFF,   0x1FFFFF,  0x3FFFFF,  0x7FFFFF,
-    0xFFFFFF,   0x1FFFFFF, 0x3FFFFFF, 0x7FFFFFF, 0xFFFFFFF, 0x1FFFFFFF,
-    0x3FFFFFFF, 0x7FFFFFFF,
-];
-
 #[inline(always)]
 const fn get_middle_bits(
     bitContainer: BitContainerType,
@@ -152,10 +187,10 @@ const fn get_middle_bits(
     const REG_MASK: u32 = BitContainerType::BITS - 1;
 
     // if start > regMask, the bitstream is corrupted, and the result is undefined.
-    debug_assert!(nbBits < MASK.len() as u32);
+    debug_assert!(nbBits < BIT_MASK_SIZE as u32);
 
     #[cfg(feature = "unsafe-performance-experimental")]
-    if nbBits >= MASK.len() as u32 {
+    if nbBits >= BIT_MASK_SIZE as u32 {
         unsafe { std::hint::unreachable_unchecked() };
     }
 
@@ -166,85 +201,69 @@ const fn get_middle_bits(
         // importance.
         bitContainer >> (start & REG_MASK) & ((1usize << nbBits) - 1)
     } else {
-        bitContainer >> (start & REG_MASK) & MASK[nbBits as usize] as BitContainerType
+        bitContainer >> (start & REG_MASK) & BIT_mask[nbBits as u8 as usize] as BitContainerType
     }
 }
 
 impl<'a> BIT_DStream_t<'a> {
     pub(crate) fn new(srcBuffer: &'a [u8]) -> Result<Self, Error> {
-        let mut bitD = Self {
-            bitContainer: 0,
-            bitsConsumed: 0,
-            ptr: core::ptr::null::<core::ffi::c_char>(),
-            start: core::ptr::null::<core::ffi::c_char>(),
-            limitPtr: core::ptr::null::<core::ffi::c_char>(),
-            _marker: PhantomData,
-        };
-
         if srcBuffer.is_empty() {
             return Err(Error::srcSize_wrong);
         }
 
         const USIZE_BYTES: usize = size_of::<BitContainerType>();
 
+        let start = srcBuffer.as_ptr() as *const core::ffi::c_char;
+        let limitPtr = start.wrapping_add(USIZE_BYTES);
+
+        // None when endMark not present
+        let bitsConsumed = srcBuffer
+            .last()
+            .and_then(|v| v.checked_ilog2())
+            .map(|v| 8 - v);
+
         if let Some(chunk) = srcBuffer.last_chunk() {
-            bitD.start = srcBuffer.as_ptr() as *const core::ffi::c_char;
-            bitD.limitPtr = bitD.start.wrapping_add(USIZE_BYTES);
-
-            bitD.ptr = (srcBuffer.as_ptr() as *const core::ffi::c_char)
-                .wrapping_add(srcBuffer.len())
-                .wrapping_sub(USIZE_BYTES);
-            bitD.bitContainer = usize::from_le_bytes(*chunk);
-
-            match srcBuffer.last().and_then(|v| v.checked_ilog2()) {
-                None => {
-                    /* endMark not present */
-                    return Err(Error::GENERIC);
-                }
-                Some(v) => {
-                    bitD.bitsConsumed = 8 - v;
-                }
-            }
+            Ok(Self {
+                bitContainer: usize::from_le_bytes(*chunk),
+                bitsConsumed: bitsConsumed.ok_or(Error::GENERIC)?,
+                ptr: start
+                    .wrapping_add(srcBuffer.len())
+                    .wrapping_sub(USIZE_BYTES),
+                start,
+                limitPtr,
+                _marker: PhantomData,
+            })
         } else {
-            bitD.start = srcBuffer.as_ptr() as *const core::ffi::c_char;
-            bitD.limitPtr = bitD.start.wrapping_add(USIZE_BYTES);
-            bitD.ptr = bitD.start;
-
-            bitD.bitContainer = usize::from(srcBuffer[0]);
-
+            let mut bitContainer = usize::from(srcBuffer[0]);
             if srcBuffer.len() >= 7 {
-                bitD.bitContainer += usize::from(srcBuffer[6]) << (USIZE_BYTES * 8 - 16);
+                bitContainer += usize::from(srcBuffer[6]) << (USIZE_BYTES * 8 - 16);
             }
             if srcBuffer.len() >= 6 {
-                bitD.bitContainer += usize::from(srcBuffer[5]) << (USIZE_BYTES * 8 - 24);
+                bitContainer += usize::from(srcBuffer[5]) << (USIZE_BYTES * 8 - 24);
             }
             if srcBuffer.len() >= 5 {
-                bitD.bitContainer += usize::from(srcBuffer[4]) << (USIZE_BYTES * 8 - 32);
+                bitContainer += usize::from(srcBuffer[4]) << (USIZE_BYTES * 8 - 32);
             }
             if srcBuffer.len() >= 4 {
-                bitD.bitContainer += usize::from(srcBuffer[3]) << 24;
+                bitContainer += usize::from(srcBuffer[3]) << 24;
             }
             if srcBuffer.len() >= 3 {
-                bitD.bitContainer += usize::from(srcBuffer[2]) << 16;
+                bitContainer += usize::from(srcBuffer[2]) << 16;
             }
             if srcBuffer.len() >= 2 {
-                bitD.bitContainer += usize::from(srcBuffer[1]) << 8;
+                bitContainer += usize::from(srcBuffer[1]) << 8;
             }
 
-            match srcBuffer.last().and_then(|v| v.checked_ilog2()) {
-                None => {
-                    /* endMark not present */
-                    return Err(Error::corruption_detected);
-                }
-                Some(v) => {
-                    bitD.bitsConsumed = 8 - v;
-                }
-            }
-
-            bitD.bitsConsumed += ((USIZE_BYTES - srcBuffer.len()) * 8) as u32;
+            Ok(Self {
+                bitContainer,
+                bitsConsumed: bitsConsumed.ok_or(Error::corruption_detected)?
+                    + ((USIZE_BYTES - srcBuffer.len()) * 8) as u32,
+                ptr: start,
+                start,
+                limitPtr,
+                _marker: PhantomData,
+            })
         }
-
-        Ok(bitD)
     }
 
     /// Provides the next n bits from local register.
@@ -353,17 +372,17 @@ impl<'a> BIT_DStream_t<'a> {
             };
         }
 
-        let mut nbBytes = self.bitsConsumed / 8;
-        let result = if unsafe { self.ptr.sub(nbBytes as usize) } < self.start {
-            nbBytes = unsafe { self.ptr.offset_from(self.start) } as u32;
+        let mut nbBytes = self.bitsConsumed as usize / 8;
+        let result = if unsafe { self.ptr.sub(nbBytes) } < self.start {
+            nbBytes = unsafe { self.ptr.offset_from_unsigned(self.start) };
 
             StreamStatus::EndOfBuffer
         } else {
             StreamStatus::Unfinished
         };
 
-        self.ptr = unsafe { self.ptr.sub(nbBytes as usize) };
-        self.bitsConsumed = (self.bitsConsumed).wrapping_sub(nbBytes * 8);
+        self.ptr = unsafe { self.ptr.sub(nbBytes) };
+        self.bitsConsumed = (self.bitsConsumed).wrapping_sub((nbBytes * 8) as u32);
         self.bitContainer = unsafe { core::ptr::read_unaligned(self.ptr as *const usize) }.to_le();
 
         result
@@ -399,7 +418,7 @@ mod tests {
         let buffer = [0b10101010, 0b11110000, END_MARK];
         let stream = BIT_DStream_t::new(&buffer).expect("BIT_DStream_t::new should succeed");
         assert!(stream.ptr >= stream.start);
-        assert!(stream.bitContainer != 0);
+        assert_ne!(stream.bitContainer, 0);
     }
 
     #[test]

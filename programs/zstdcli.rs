@@ -11,8 +11,9 @@ use libzstd_rs_sys::lib::zdict::experimental::{
 };
 use libzstd_rs_sys::lib::zdict::ZDICT_params_t;
 use libzstd_rs_sys::lib::zstd::{
-    ZSTD_ParamSwitch_e, ZSTD_btultra2, ZSTD_cParameter, ZSTD_compressionParameters, ZSTD_strategy,
-    ZSTD_BLOCKSIZELOG_MAX, ZSTD_WINDOWLOG_MAX_32, ZSTD_WINDOWLOG_MAX_64,
+    ParamSwitch, ZSTD_btultra2, ZSTD_cParameter, ZSTD_compressionParameters, ZSTD_strategy,
+    ZSTD_BLOCKSIZELOG_MAX, ZSTD_CHAINLOG_MAX, ZSTD_HASHLOG_MAX, ZSTD_LDM_HASHLOG_MAX,
+    ZSTD_SEARCHLOG_MAX, ZSTD_WINDOWLOG_MAX,
 };
 
 use crate::benchzstd::{BMK_benchFilesAdvanced, BMK_initAdvancedParams, BMK_syntheticTest};
@@ -94,7 +95,7 @@ pub struct FIO_prefs_s {
     pub targetCBlockSize: size_t,
     pub srcSizeHint: core::ffi::c_int,
     pub testMode: core::ffi::c_int,
-    pub literalCompressionMode: ZSTD_ParamSwitch_e,
+    pub literalCompressionMode: ParamSwitch,
     pub removeSrcFile: core::ffi::c_int,
     pub overwrite: core::ffi::c_int,
     pub asyncIO: core::ffi::c_int,
@@ -105,7 +106,7 @@ pub struct FIO_prefs_s {
     pub contentSize: core::ffi::c_int,
     pub allowBlockDevices: core::ffi::c_int,
     pub passThrough: core::ffi::c_int,
-    pub mmapDict: ZSTD_ParamSwitch_e,
+    pub mmapDict: ParamSwitch,
 }
 pub type FIO_prefs_t = FIO_prefs_s;
 pub type BMK_mode_t = core::ffi::c_uint;
@@ -127,7 +128,7 @@ pub struct BMK_advancedParams_t {
     pub ldmHashLog: core::ffi::c_int,
     pub ldmBucketSizeLog: core::ffi::c_int,
     pub ldmHashRateLog: core::ffi::c_int,
-    pub literalCompressionMode: ZSTD_ParamSwitch_e,
+    pub literalCompressionMode: ParamSwitch,
     pub useRowMatchFinder: core::ffi::c_int,
 }
 pub type dictType = core::ffi::c_uint;
@@ -142,10 +143,8 @@ pub const zom_test: zstd_operation_mode = 2;
 pub const zom_decompress: zstd_operation_mode = 1;
 pub const zom_compress: zstd_operation_mode = 0;
 pub const UTIL_FILESIZE_UNKNOWN: core::ffi::c_int = -(1);
-pub const ZSTD_CHAINLOG_MAX_32: core::ffi::c_int = 29;
-pub const ZSTD_CHAINLOG_MAX_64: core::ffi::c_int = 30;
 pub const ZSTD_MINMATCH_MIN: core::ffi::c_int = 3;
-pub const ZSTD_TARGETLENGTH_MAX: core::ffi::c_int = (1) << ZSTD_BLOCKSIZELOG_MAX;
+pub const ZSTD_TARGETLENGTH_MAX: core::ffi::c_int = 1 << ZSTD_BLOCKSIZELOG_MAX;
 pub const ZSTD_STRATEGY_MAX: core::ffi::c_int = ZSTD_btultra2 as core::ffi::c_int;
 pub const ZSTD_OVERLAPLOG_MAX: core::ffi::c_int = 9;
 pub const ZSTD_LDM_BUCKETSIZELOG_MAX: core::ffi::c_int = 8;
@@ -173,9 +172,8 @@ const ZSTD_UNXZ: &CStr = c"unxz";
 const ZSTD_LZ4: &CStr = c"lz4";
 const ZSTD_UNLZ4: &CStr = c"unlz4";
 pub const DISPLAY_LEVEL_DEFAULT: core::ffi::c_int = 2;
-static mut g_defaultDictName: *const core::ffi::c_char =
-    b"dictionary\0" as *const u8 as *const core::ffi::c_char;
-static g_defaultMaxDictSize: core::ffi::c_uint = (110 * ((1) << 10)) as core::ffi::c_uint;
+static mut g_defaultDictName: *const core::ffi::c_char = c"dictionary".as_ptr();
+static g_defaultMaxDictSize: core::ffi::c_uint = (110 * (1 << 10)) as core::ffi::c_uint;
 static g_defaultDictCLevel: core::ffi::c_int = 3;
 static g_defaultSelectivityLevel: core::ffi::c_uint = 9;
 static g_defaultMaxWindowLog: core::ffi::c_uint = 27;
@@ -190,26 +188,20 @@ pub const DEFAULT_ACCEL: core::ffi::c_int = 1;
 pub const NBWORKERS_AUTOCPU: core::ffi::c_int = 0;
 static mut g_displayLevel: core::ffi::c_int = DISPLAY_LEVEL_DEFAULT;
 unsafe fn checkLibVersion() {
-    if strcmp(
-        b"1.5.8\0" as *const u8 as *const core::ffi::c_char,
-        ZSTD_versionString(),
-    ) != 0
-    {
+    if strcmp(c"1.5.8".as_ptr(), ZSTD_versionString()) != 0 {
         if g_displayLevel >= 1 {
             fprintf(
                 stderr,
-                b"Error : incorrect library version (expecting : %s ; actual : %s ) \n\0"
-                    as *const u8 as *const core::ffi::c_char,
-                b"1.5.8\0" as *const u8 as *const core::ffi::c_char,
+                c"Error : incorrect library version (expecting : %s ; actual : %s ) \n".as_ptr(),
+                c"1.5.8".as_ptr(),
                 ZSTD_versionString(),
             );
         }
         if g_displayLevel >= 1 {
             fprintf(
                 stderr,
-                b"Please update library to version %s, or use stand-alone zstd binary \n\0"
-                    as *const u8 as *const core::ffi::c_char,
-                b"1.5.8\0" as *const u8 as *const core::ffi::c_char,
+                c"Please update library to version %s, or use stand-alone zstd binary \n".as_ptr(),
+                c"1.5.8".as_ptr(),
             );
         }
         exit(1);
@@ -227,489 +219,396 @@ unsafe fn exeNameMatch(
 unsafe fn usage(f: *mut FILE, programName: *const core::ffi::c_char) {
     fprintf(
         f,
-        b"Compress or decompress the INPUT file(s); reads from STDIN if INPUT is `-` or not provided.\n\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"Compress or decompress the INPUT file(s); reads from STDIN if INPUT is `-` or not provided.\n\n".as_ptr(),
     );
     fprintf(
         f,
-        b"Usage: %s [OPTIONS...] [INPUT... | -] [-o OUTPUT]\n\n\0" as *const u8
-            as *const core::ffi::c_char,
+        c"Usage: %s [OPTIONS...] [INPUT... | -] [-o OUTPUT]\n\n".as_ptr(),
         programName,
     );
-    fprintf(f, b"Options:\n\0" as *const u8 as *const core::ffi::c_char);
+    fprintf(f, c"Options:\n".as_ptr());
     fprintf(
         f,
-        b"  -o OUTPUT                     Write output to a single file, OUTPUT.\n\0" as *const u8
-            as *const core::ffi::c_char,
+        c"  -o OUTPUT                     Write output to a single file, OUTPUT.\n".as_ptr(),
     );
     fprintf(
         f,
-        b"  -k, --keep                    Preserve INPUT file(s). [Default] \n\0" as *const u8
-            as *const core::ffi::c_char,
+        c"  -k, --keep                    Preserve INPUT file(s). [Default] \n".as_ptr(),
     );
     fprintf(
         f,
-        b"  --rm                          Remove INPUT file(s) after successful (de)compression to file.\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  --rm                          Remove INPUT file(s) after successful (de)compression to file.\n".as_ptr(),
     );
     if exeNameMatch(programName, ZSTD_GZ.as_ptr()) != 0 {
         fprintf(
             f,
-            b"  -n, --no-name                 Do not store original filename when compressing.\n\n\0"
-                as *const u8 as *const core::ffi::c_char,
+            c"  -n, --no-name                 Do not store original filename when compressing.\n\n"
+                .as_ptr(),
         );
     }
-    fprintf(f, b"\n\0" as *const u8 as *const core::ffi::c_char);
+    fprintf(f, c"\n".as_ptr());
     fprintf(
         f,
-        b"  -#                            Desired compression level, where `#` is a number between 1 and %d;\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  -#                            Desired compression level, where `#` is a number between 1 and %d;\n".as_ptr(),
         19,
     );
     fprintf(
         f,
-        b"                                lower numbers provide faster compression, higher numbers yield\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"                                lower numbers provide faster compression, higher numbers yield\n".as_ptr(),
     );
     fprintf(
         f,
-        b"                                better compression ratios. [Default: %d]\n\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"                                better compression ratios. [Default: %d]\n\n".as_ptr(),
         3,
     );
     fprintf(
         f,
-        b"  -d, --decompress              Perform decompression.\n\0" as *const u8
-            as *const core::ffi::c_char,
+        c"  -d, --decompress              Perform decompression.\n".as_ptr(),
     );
     fprintf(
         f,
-        b"  -D DICT                       Use DICT as the dictionary for compression or decompression.\n\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  -D DICT                       Use DICT as the dictionary for compression or decompression.\n\n".as_ptr(),
     );
     fprintf(
         f,
-        b"  -f, --force                   Disable input and output checks. Allows overwriting existing files,\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  -f, --force                   Disable input and output checks. Allows overwriting existing files,\n".as_ptr(),
     );
     fprintf(
         f,
-        b"                                receiving input from the console, printing output to STDOUT, and\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"                                receiving input from the console, printing output to STDOUT, and\n".as_ptr(),
     );
     fprintf(
         f,
-        b"                                operating on links, block devices, etc. Unrecognized formats will be\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"                                operating on links, block devices, etc. Unrecognized formats will be\n".as_ptr(),
     );
     fprintf(
         f,
-        b"                                passed-through through as-is.\n\n\0" as *const u8
-            as *const core::ffi::c_char,
+        c"                                passed-through through as-is.\n\n".as_ptr(),
     );
     fprintf(
         f,
-        b"  -h                            Display short usage and exit.\n\0" as *const u8
-            as *const core::ffi::c_char,
+        c"  -h                            Display short usage and exit.\n".as_ptr(),
     );
     fprintf(
         f,
-        b"  -H, --help                    Display full help and exit.\n\0" as *const u8
-            as *const core::ffi::c_char,
+        c"  -H, --help                    Display full help and exit.\n".as_ptr(),
     );
     fprintf(
         f,
-        b"  -V, --version                 Display the program version and exit.\n\0" as *const u8
-            as *const core::ffi::c_char,
+        c"  -V, --version                 Display the program version and exit.\n".as_ptr(),
     );
-    fprintf(f, b"\n\0" as *const u8 as *const core::ffi::c_char);
+    fprintf(f, c"\n".as_ptr());
 }
 unsafe fn usageAdvanced(programName: *const core::ffi::c_char) {
     fprintf(
         stdout,
-        b"*** %s (%i-bit) %s, by %s ***\n\0" as *const u8 as *const core::ffi::c_char,
-        b"Zstandard CLI\0" as *const u8 as *const core::ffi::c_char,
-        (::core::mem::size_of::<size_t>()).wrapping_mul(8) as core::ffi::c_int,
-        b"v1.5.8\0" as *const u8 as *const core::ffi::c_char,
-        b"Yann Collet\0" as *const u8 as *const core::ffi::c_char,
+        c"*** %s (%i-bit) %s, by %s ***\n".as_ptr(),
+        c"Zstandard CLI".as_ptr(),
+        size_t::BITS as core::ffi::c_int,
+        c"v1.5.8".as_ptr(),
+        c"Yann Collet".as_ptr(),
     );
-    fprintf(stdout, b"\n\0" as *const u8 as *const core::ffi::c_char);
+    fprintf(stdout, c"\n".as_ptr());
     usage(stdout, programName);
+    fprintf(stdout, c"Advanced options:\n".as_ptr());
     fprintf(
         stdout,
-        b"Advanced options:\n\0" as *const u8 as *const core::ffi::c_char,
+        c"  -c, --stdout                  Write to STDOUT (even if it is a console) and keep the INPUT file(s).\n\n".as_ptr(),
     );
     fprintf(
         stdout,
-        b"  -c, --stdout                  Write to STDOUT (even if it is a console) and keep the INPUT file(s).\n\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  -v, --verbose                 Enable verbose output; pass multiple times to increase verbosity.\n".as_ptr(),
     );
     fprintf(
         stdout,
-        b"  -v, --verbose                 Enable verbose output; pass multiple times to increase verbosity.\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  -q, --quiet                   Suppress warnings; pass twice to suppress errors.\n"
+            .as_ptr(),
     );
     fprintf(
         stdout,
-        b"  -q, --quiet                   Suppress warnings; pass twice to suppress errors.\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  --trace LOG                   Log tracing information to LOG.\n".as_ptr(),
+    );
+    fprintf(stdout, c"\n".as_ptr());
+    fprintf(
+        stdout,
+        c"  --[no-]progress               Forcibly show/hide the progress counter. NOTE: Any (de)compressed\n".as_ptr(),
     );
     fprintf(
         stdout,
-        b"  --trace LOG                   Log tracing information to LOG.\n\0" as *const u8
-            as *const core::ffi::c_char,
-    );
-    fprintf(stdout, b"\n\0" as *const u8 as *const core::ffi::c_char);
-    fprintf(
-        stdout,
-        b"  --[no-]progress               Forcibly show/hide the progress counter. NOTE: Any (de)compressed\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"                                output to terminal will mix with progress counter text.\n\n".as_ptr(),
     );
     fprintf(
         stdout,
-        b"                                output to terminal will mix with progress counter text.\n\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  -r                            Operate recursively on directories.\n".as_ptr(),
     );
     fprintf(
         stdout,
-        b"  -r                            Operate recursively on directories.\n\0" as *const u8
-            as *const core::ffi::c_char,
+        c"  --filelist LIST               Read a list of files to operate on from LIST.\n".as_ptr(),
     );
     fprintf(
         stdout,
-        b"  --filelist LIST               Read a list of files to operate on from LIST.\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  --output-dir-flat DIR         Store processed files in DIR.\n".as_ptr(),
     );
     fprintf(
         stdout,
-        b"  --output-dir-flat DIR         Store processed files in DIR.\n\0" as *const u8
-            as *const core::ffi::c_char,
-    );
-    fprintf(
-        stdout,
-        b"  --output-dir-mirror DIR       Store processed files in DIR, respecting original directory structure.\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  --output-dir-mirror DIR       Store processed files in DIR, respecting original directory structure.\n".as_ptr(),
     );
     if AIO_supported() != 0 {
         fprintf(
             stdout,
-            b"  --[no-]asyncio                Use asynchronous IO. [Default: Enabled]\n\0"
-                as *const u8 as *const core::ffi::c_char,
+            c"  --[no-]asyncio                Use asynchronous IO. [Default: Enabled]\n".as_ptr(),
         );
     }
-    fprintf(stdout, b"\n\0" as *const u8 as *const core::ffi::c_char);
+    fprintf(stdout, c"\n".as_ptr());
     fprintf(
         stdout,
-        b"  --[no-]check                  Add XXH64 integrity checksums during compression. [Default: Add, Validate]\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  --[no-]check                  Add XXH64 integrity checksums during compression. [Default: Add, Validate]\n".as_ptr(),
     );
     fprintf(
         stdout,
-        b"                                If `-d` is present, ignore/validate checksums during decompression.\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"                                If `-d` is present, ignore/validate checksums during decompression.\n".as_ptr(),
     );
-    fprintf(stdout, b"\n\0" as *const u8 as *const core::ffi::c_char);
+    fprintf(stdout, c"\n".as_ptr());
     fprintf(
         stdout,
-        b"  --                            Treat remaining arguments after `--` as files.\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  --                            Treat remaining arguments after `--` as files.\n"
+            .as_ptr(),
     );
-    fprintf(stdout, b"\n\0" as *const u8 as *const core::ffi::c_char);
+    fprintf(stdout, c"\n".as_ptr());
+    fprintf(stdout, c"Advanced compression options:\n".as_ptr());
     fprintf(
         stdout,
-        b"Advanced compression options:\n\0" as *const u8 as *const core::ffi::c_char,
-    );
-    fprintf(
-        stdout,
-        b"  --ultra                       Enable levels beyond %i, up to %i; requires more memory.\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  --ultra                       Enable levels beyond %i, up to %i; requires more memory.\n".as_ptr(),
         19,
         ZSTD_maxCLevel(),
     );
     fprintf(
         stdout,
-        b"  --fast[=#]                    Use to very fast compression levels. [Default: %u]\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  --fast[=#]                    Use to very fast compression levels. [Default: %u]\n"
+            .as_ptr(),
         1,
     );
     if exeNameMatch(programName, ZSTD_GZ.as_ptr()) != 0 {
         fprintf(
             stdout,
-            b"  --best                        Compatibility alias for `-9`.\n\0" as *const u8
-                as *const core::ffi::c_char,
+            c"  --best                        Compatibility alias for `-9`.\n".as_ptr(),
         );
     }
     fprintf(
         stdout,
-        b"  --adapt                       Dynamically adapt compression level to I/O conditions.\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  --adapt                       Dynamically adapt compression level to I/O conditions.\n"
+            .as_ptr(),
     );
     fprintf(
         stdout,
-        b"  --long[=#]                    Enable long distance matching with window log #. [Default: %u]\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  --long[=#]                    Enable long distance matching with window log #. [Default: %u]\n".as_ptr(),
         g_defaultMaxWindowLog,
     );
     fprintf(
         stdout,
-        b"  --patch-from=REF              Use REF as the reference point for Zstandard's diff engine. \n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  --patch-from=REF              Use REF as the reference point for Zstandard's diff engine. \n".as_ptr(),
     );
     fprintf(
         stdout,
-        b"  --patch-apply                 Equivalent for `-d --patch-from` \n\n\0" as *const u8
-            as *const core::ffi::c_char,
+        c"  --patch-apply                 Equivalent for `-d --patch-from` \n\n".as_ptr(),
     );
     fprintf(
         stdout,
-        b"  -T#                           Spawn # compression threads. [Default: 1; pass 0 for core count.]\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  -T#                           Spawn # compression threads. [Default: 1; pass 0 for core count.]\n".as_ptr(),
     );
     fprintf(
         stdout,
-        b"  --single-thread               Share a single thread for I/O and compression (slightly different than `-T1`).\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  --single-thread               Share a single thread for I/O and compression (slightly different than `-T1`).\n".as_ptr(),
+    );
+    fprintf(stdout, c"  --auto-threads={physical|logical}\n".as_ptr());
+    fprintf(
+        stdout,
+        c"                                Use physical/logical cores when using `-T0`. [Default: Physical]\n\n".as_ptr(),
     );
     fprintf(
         stdout,
-        b"  --auto-threads={physical|logical}\n\0" as *const u8 as *const core::ffi::c_char,
+        c"  --jobsize=#                   Set job size to #. [Default: 0 (automatic)]\n".as_ptr(),
     );
     fprintf(
         stdout,
-        b"                                Use physical/logical cores when using `-T0`. [Default: Physical]\n\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  --rsyncable                   Compress using a rsync-friendly method (`--jobsize=#` sets unit size). \n".as_ptr(),
+    );
+    fprintf(stdout, c"\n".as_ptr());
+    fprintf(
+        stdout,
+        c"  --exclude-compressed          Only compress files that are not already compressed.\n\n"
+            .as_ptr(),
     );
     fprintf(
         stdout,
-        b"  --jobsize=#                   Set job size to #. [Default: 0 (automatic)]\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  --stream-size=#               Specify size of streaming input from STDIN.\n".as_ptr(),
     );
     fprintf(
         stdout,
-        b"  --rsyncable                   Compress using a rsync-friendly method (`--jobsize=#` sets unit size). \n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  --size-hint=#                 Optimize compression parameters for streaming input of approximately size #.\n".as_ptr(),
     );
-    fprintf(stdout, b"\n\0" as *const u8 as *const core::ffi::c_char);
+    fprintf(stdout, c"  --target-compressed-block-size=#\n".as_ptr());
     fprintf(
         stdout,
-        b"  --exclude-compressed          Only compress files that are not already compressed.\n\n\0"
-            as *const u8 as *const core::ffi::c_char,
-    );
-    fprintf(
-        stdout,
-        b"  --stream-size=#               Specify size of streaming input from STDIN.\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"                                Generate compressed blocks of approximately # size.\n\n"
+            .as_ptr(),
     );
     fprintf(
         stdout,
-        b"  --size-hint=#                 Optimize compression parameters for streaming input of approximately size #.\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  --no-dictID                   Don't write `dictID` into the header (dictionary compression only).\n".as_ptr(),
     );
     fprintf(
         stdout,
-        b"  --target-compressed-block-size=#\n\0" as *const u8 as *const core::ffi::c_char,
+        c"  --[no-]compress-literals      Force (un)compressed literals.\n".as_ptr(),
     );
     fprintf(
         stdout,
-        b"                                Generate compressed blocks of approximately # size.\n\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  --[no-]row-match-finder       Explicitly enable/disable the fast, row-based matchfinder for\n".as_ptr(),
     );
     fprintf(
         stdout,
-        b"  --no-dictID                   Don't write `dictID` into the header (dictionary compression only).\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"                                the 'greedy', 'lazy', and 'lazy2' strategies.\n".as_ptr(),
+    );
+    fprintf(stdout, c"\n".as_ptr());
+    fprintf(
+        stdout,
+        c"  --format=zstd                 Compress files to the `.zst` format. [Default]\n"
+            .as_ptr(),
     );
     fprintf(
         stdout,
-        b"  --[no-]compress-literals      Force (un)compressed literals.\n\0" as *const u8
-            as *const core::ffi::c_char,
+        c"  --[no-]mmap-dict              Memory-map dictionary file rather than mallocing and loading all at once\n".as_ptr(),
     );
     fprintf(
         stdout,
-        b"  --[no-]row-match-finder       Explicitly enable/disable the fast, row-based matchfinder for\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  --format=gzip                 Compress files to the `.gz` format.\n".as_ptr(),
     );
     fprintf(
         stdout,
-        b"                                the 'greedy', 'lazy', and 'lazy2' strategies.\n\0"
-            as *const u8 as *const core::ffi::c_char,
-    );
-    fprintf(stdout, b"\n\0" as *const u8 as *const core::ffi::c_char);
-    fprintf(
-        stdout,
-        b"  --format=zstd                 Compress files to the `.zst` format. [Default]\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  --format=xz                   Compress files to the `.xz` format.\n".as_ptr(),
     );
     fprintf(
         stdout,
-        b"  --[no-]mmap-dict              Memory-map dictionary file rather than mallocing and loading all at once\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  --format=lzma                 Compress files to the `.lzma` format.\n".as_ptr(),
+    );
+    fprintf(stdout, c"\n".as_ptr());
+    fprintf(stdout, c"Advanced decompression options:\n".as_ptr());
+    fprintf(
+        stdout,
+        c"  -l                            Print information about Zstandard-compressed files.\n"
+            .as_ptr(),
     );
     fprintf(
         stdout,
-        b"  --format=gzip                 Compress files to the `.gz` format.\n\0" as *const u8
-            as *const core::ffi::c_char,
+        c"  --test                        Test compressed file integrity.\n".as_ptr(),
     );
     fprintf(
         stdout,
-        b"  --format=xz                   Compress files to the `.xz` format.\n\0" as *const u8
-            as *const core::ffi::c_char,
+        c"  -M#                           Set the memory usage limit to # megabytes.\n".as_ptr(),
     );
     fprintf(
         stdout,
-        b"  --format=lzma                 Compress files to the `.lzma` format.\n\0" as *const u8
-            as *const core::ffi::c_char,
+        c"  --[no-]sparse                 Enable sparse mode. [Default: Enabled for files, disabled for STDOUT.]\n".as_ptr(),
     );
-    fprintf(stdout, b"\n\0" as *const u8 as *const core::ffi::c_char);
-    fprintf(
-        stdout,
-        b"Advanced decompression options:\n\0" as *const u8 as *const core::ffi::c_char,
-    );
-    fprintf(
-        stdout,
-        b"  -l                            Print information about Zstandard-compressed files.\n\0"
-            as *const u8 as *const core::ffi::c_char,
-    );
-    fprintf(
-        stdout,
-        b"  --test                        Test compressed file integrity.\n\0" as *const u8
-            as *const core::ffi::c_char,
-    );
-    fprintf(
-        stdout,
-        b"  -M#                           Set the memory usage limit to # megabytes.\n\0"
-            as *const u8 as *const core::ffi::c_char,
-    );
-    fprintf(
-        stdout,
-        b"  --[no-]sparse                 Enable sparse mode. [Default: Enabled for files, disabled for STDOUT.]\n\0"
-            as *const u8 as *const core::ffi::c_char,
-    );
-    let mut passThroughDefault = b"Disabled\0" as *const u8 as *const core::ffi::c_char;
+    let mut passThroughDefault = c"Disabled".as_ptr();
     if exeNameMatch(programName, ZSTD_CAT.as_ptr()) != 0
         || exeNameMatch(programName, ZSTD_ZCAT.as_ptr()) != 0
         || exeNameMatch(programName, ZSTD_GZCAT.as_ptr()) != 0
     {
-        passThroughDefault = b"Enabled\0" as *const u8 as *const core::ffi::c_char;
+        passThroughDefault = c"Enabled".as_ptr();
     }
     fprintf(
         stdout,
-        b"  --[no-]pass-through           Pass through uncompressed files as-is. [Default: %s]\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  --[no-]pass-through           Pass through uncompressed files as-is. [Default: %s]\n"
+            .as_ptr(),
         passThroughDefault,
     );
-    fprintf(stdout, b"\n\0" as *const u8 as *const core::ffi::c_char);
+    fprintf(stdout, c"\n".as_ptr());
+    fprintf(stdout, c"Dictionary builder:\n".as_ptr());
     fprintf(
         stdout,
-        b"Dictionary builder:\n\0" as *const u8 as *const core::ffi::c_char,
+        c"  --train                       Create a dictionary from a training set of files.\n\n"
+            .as_ptr(),
     );
     fprintf(
         stdout,
-        b"  --train                       Create a dictionary from a training set of files.\n\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  --train-cover[=k=#,d=#,steps=#,split=#,shrink[=#]]\n".as_ptr(),
     );
     fprintf(
         stdout,
-        b"  --train-cover[=k=#,d=#,steps=#,split=#,shrink[=#]]\n\0" as *const u8
-            as *const core::ffi::c_char,
+        c"                                Use the cover algorithm (with optional arguments).\n"
+            .as_ptr(),
     );
     fprintf(
         stdout,
-        b"                                Use the cover algorithm (with optional arguments).\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  --train-fastcover[=k=#,d=#,f=#,steps=#,split=#,accel=#,shrink[=#]]\n".as_ptr(),
     );
     fprintf(
         stdout,
-        b"  --train-fastcover[=k=#,d=#,f=#,steps=#,split=#,accel=#,shrink[=#]]\n\0" as *const u8
-            as *const core::ffi::c_char,
+        c"                                Use the fast cover algorithm (with optional arguments).\n\n".as_ptr(),
     );
     fprintf(
         stdout,
-        b"                                Use the fast cover algorithm (with optional arguments).\n\n\0"
-            as *const u8 as *const core::ffi::c_char,
-    );
-    fprintf(
-        stdout,
-        b"  --train-legacy[=s=#]          Use the legacy algorithm with selectivity #. [Default: %u]\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  --train-legacy[=s=#]          Use the legacy algorithm with selectivity #. [Default: %u]\n".as_ptr(),
         g_defaultSelectivityLevel,
     );
     fprintf(
         stdout,
-        b"  -o NAME                       Use NAME as dictionary name. [Default: %s]\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  -o NAME                       Use NAME as dictionary name. [Default: %s]\n".as_ptr(),
         g_defaultDictName,
     );
     fprintf(
         stdout,
-        b"  --maxdict=#                   Limit dictionary to specified size #. [Default: %u]\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  --maxdict=#                   Limit dictionary to specified size #. [Default: %u]\n"
+            .as_ptr(),
         g_defaultMaxDictSize,
     );
     fprintf(
         stdout,
-        b"  --dictID=#                    Force dictionary ID to #. [Default: Random]\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  --dictID=#                    Force dictionary ID to #. [Default: Random]\n".as_ptr(),
     );
-    fprintf(stdout, b"\n\0" as *const u8 as *const core::ffi::c_char);
+    fprintf(stdout, c"\n".as_ptr());
+    fprintf(stdout, c"Benchmark options:\n".as_ptr());
     fprintf(
         stdout,
-        b"Benchmark options:\n\0" as *const u8 as *const core::ffi::c_char,
-    );
-    fprintf(
-        stdout,
-        b"  -b#                           Perform benchmarking with compression level #. [Default: %d]\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  -b#                           Perform benchmarking with compression level #. [Default: %d]\n".as_ptr(),
         3,
     );
     fprintf(
         stdout,
-        b"  -e#                           Test all compression levels up to #; starting level is `-b#`. [Default: 1]\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  -e#                           Test all compression levels up to #; starting level is `-b#`. [Default: 1]\n".as_ptr(),
     );
     fprintf(
         stdout,
-        b"  -i#                           Set the minimum evaluation to time # seconds. [Default: 3]\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  -i#                           Set the minimum evaluation to time # seconds. [Default: 3]\n".as_ptr(),
     );
     fprintf(
         stdout,
-        b"  --split=#                     Split input into independent chunks of size #. [Default: No chunking]\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  --split=#                     Split input into independent chunks of size #. [Default: No chunking]\n".as_ptr(),
     );
     fprintf(
         stdout,
-        b"  -S                            Output one benchmark result per input file. [Default: Consolidated result]\n\0"
-            as *const u8 as *const core::ffi::c_char,
+        c"  -S                            Output one benchmark result per input file. [Default: Consolidated result]\n".as_ptr(),
     );
     fprintf(
         stdout,
-        b"  -D dictionary                 Benchmark using dictionary \n\0" as *const u8
-            as *const core::ffi::c_char,
+        c"  -D dictionary                 Benchmark using dictionary \n".as_ptr(),
     );
     fprintf(
         stdout,
-        b"  --priority=rt                 Set process priority to real-time.\n\0" as *const u8
-            as *const core::ffi::c_char,
+        c"  --priority=rt                 Set process priority to real-time.\n".as_ptr(),
     );
 }
 unsafe fn badUsage(programName: *const core::ffi::c_char, parameter: *const core::ffi::c_char) {
     if g_displayLevel >= 1 {
-        fprintf(
-            stderr,
-            b"Incorrect parameter: %s \n\0" as *const u8 as *const core::ffi::c_char,
-            parameter,
-        );
+        fprintf(stderr, c"Incorrect parameter: %s \n".as_ptr(), parameter);
     }
     if g_displayLevel >= 2 {
         usage(stderr, programName);
     }
 }
 unsafe fn waitEnter() {
-    fprintf(
-        stderr,
-        b"Press enter to continue... \n\0" as *const u8 as *const core::ffi::c_char,
-    );
+    fprintf(stderr, c"Press enter to continue... \n".as_ptr());
     getchar();
 }
 unsafe fn lastNameFromPath(path: *const core::ffi::c_char) -> *const core::ffi::c_char {
@@ -724,11 +623,7 @@ unsafe fn lastNameFromPath(path: *const core::ffi::c_char) -> *const core::ffi::
 }
 unsafe fn errorOut(msg: *const core::ffi::c_char) {
     if g_displayLevel >= 1 {
-        fprintf(
-            stderr,
-            b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-            msg,
-        );
+        fprintf(stderr, c"%s \n".as_ptr(), msg);
     }
     exit(1);
 }
@@ -865,58 +760,34 @@ unsafe fn parseCoverParameters(
     mut stringPtr: *const core::ffi::c_char,
     params: *mut ZDICT_cover_params_t,
 ) -> core::ffi::c_uint {
-    ptr::write_bytes(
-        params as *mut u8,
-        0,
-        ::core::mem::size_of::<ZDICT_cover_params_t>(),
-    );
+    ptr::write_bytes(params as *mut u8, 0, size_of::<ZDICT_cover_params_t>());
     loop {
-        if longCommandWArg(
-            &mut stringPtr,
-            b"k=\0" as *const u8 as *const core::ffi::c_char,
-        ) != 0
-        {
+        if longCommandWArg(&mut stringPtr, c"k=".as_ptr()) != 0 {
             (*params).k = readU32FromChar(&mut stringPtr);
             if *stringPtr.offset(0) as core::ffi::c_int != ',' as i32 {
                 break;
             }
             stringPtr = stringPtr.offset(1);
-        } else if longCommandWArg(
-            &mut stringPtr,
-            b"d=\0" as *const u8 as *const core::ffi::c_char,
-        ) != 0
-        {
+        } else if longCommandWArg(&mut stringPtr, c"d=".as_ptr()) != 0 {
             (*params).d = readU32FromChar(&mut stringPtr);
             if *stringPtr.offset(0) as core::ffi::c_int != ',' as i32 {
                 break;
             }
             stringPtr = stringPtr.offset(1);
-        } else if longCommandWArg(
-            &mut stringPtr,
-            b"steps=\0" as *const u8 as *const core::ffi::c_char,
-        ) != 0
-        {
+        } else if longCommandWArg(&mut stringPtr, c"steps=".as_ptr()) != 0 {
             (*params).steps = readU32FromChar(&mut stringPtr);
             if *stringPtr.offset(0) as core::ffi::c_int != ',' as i32 {
                 break;
             }
             stringPtr = stringPtr.offset(1);
-        } else if longCommandWArg(
-            &mut stringPtr,
-            b"split=\0" as *const u8 as *const core::ffi::c_char,
-        ) != 0
-        {
+        } else if longCommandWArg(&mut stringPtr, c"split=".as_ptr()) != 0 {
             let splitPercentage = readU32FromChar(&mut stringPtr);
             (*params).splitPoint = splitPercentage as core::ffi::c_double / 100.0f64;
             if *stringPtr.offset(0) as core::ffi::c_int != ',' as i32 {
                 break;
             }
             stringPtr = stringPtr.offset(1);
-        } else if longCommandWArg(
-            &mut stringPtr,
-            b"shrink\0" as *const u8 as *const core::ffi::c_char,
-        ) != 0
-        {
+        } else if longCommandWArg(&mut stringPtr, c"shrink".as_ptr()) != 0 {
             (*params).shrinkDictMaxRegression = kDefaultRegression;
             (*params).shrinkDict = 1;
             if *stringPtr.offset(0) as core::ffi::c_int == '=' as i32 {
@@ -937,8 +808,7 @@ unsafe fn parseCoverParameters(
     if g_displayLevel >= 4 {
         fprintf(
             stderr,
-            b"cover: k=%u\nd=%u\nsteps=%u\nsplit=%u\nshrink%u\n\0" as *const u8
-                as *const core::ffi::c_char,
+            c"cover: k=%u\nd=%u\nsteps=%u\nsplit=%u\nshrink%u\n".as_ptr(),
             (*params).k,
             (*params).d,
             (*params).steps,
@@ -952,78 +822,46 @@ unsafe fn parseFastCoverParameters(
     mut stringPtr: *const core::ffi::c_char,
     params: *mut ZDICT_fastCover_params_t,
 ) -> core::ffi::c_uint {
-    ptr::write_bytes(
-        params as *mut u8,
-        0,
-        ::core::mem::size_of::<ZDICT_fastCover_params_t>(),
-    );
+    ptr::write_bytes(params as *mut u8, 0, size_of::<ZDICT_fastCover_params_t>());
     loop {
-        if longCommandWArg(
-            &mut stringPtr,
-            b"k=\0" as *const u8 as *const core::ffi::c_char,
-        ) != 0
-        {
+        if longCommandWArg(&mut stringPtr, c"k=".as_ptr()) != 0 {
             (*params).k = readU32FromChar(&mut stringPtr);
             if *stringPtr.offset(0) as core::ffi::c_int != ',' as i32 {
                 break;
             }
             stringPtr = stringPtr.offset(1);
-        } else if longCommandWArg(
-            &mut stringPtr,
-            b"d=\0" as *const u8 as *const core::ffi::c_char,
-        ) != 0
-        {
+        } else if longCommandWArg(&mut stringPtr, c"d=".as_ptr()) != 0 {
             (*params).d = readU32FromChar(&mut stringPtr);
             if *stringPtr.offset(0) as core::ffi::c_int != ',' as i32 {
                 break;
             }
             stringPtr = stringPtr.offset(1);
-        } else if longCommandWArg(
-            &mut stringPtr,
-            b"f=\0" as *const u8 as *const core::ffi::c_char,
-        ) != 0
-        {
+        } else if longCommandWArg(&mut stringPtr, c"f=".as_ptr()) != 0 {
             (*params).f = readU32FromChar(&mut stringPtr);
             if *stringPtr.offset(0) as core::ffi::c_int != ',' as i32 {
                 break;
             }
             stringPtr = stringPtr.offset(1);
-        } else if longCommandWArg(
-            &mut stringPtr,
-            b"steps=\0" as *const u8 as *const core::ffi::c_char,
-        ) != 0
-        {
+        } else if longCommandWArg(&mut stringPtr, c"steps=".as_ptr()) != 0 {
             (*params).steps = readU32FromChar(&mut stringPtr);
             if *stringPtr.offset(0) as core::ffi::c_int != ',' as i32 {
                 break;
             }
             stringPtr = stringPtr.offset(1);
-        } else if longCommandWArg(
-            &mut stringPtr,
-            b"accel=\0" as *const u8 as *const core::ffi::c_char,
-        ) != 0
-        {
+        } else if longCommandWArg(&mut stringPtr, c"accel=".as_ptr()) != 0 {
             (*params).accel = readU32FromChar(&mut stringPtr);
             if *stringPtr.offset(0) as core::ffi::c_int != ',' as i32 {
                 break;
             }
             stringPtr = stringPtr.offset(1);
-        } else if longCommandWArg(
-            &mut stringPtr,
-            b"split=\0" as *const u8 as *const core::ffi::c_char,
-        ) != 0
-        {
+        } else if longCommandWArg(&mut stringPtr, c"split=".as_ptr()) != 0 {
             let splitPercentage = readU32FromChar(&mut stringPtr);
             (*params).splitPoint = splitPercentage as core::ffi::c_double / 100.0f64;
             if *stringPtr.offset(0) as core::ffi::c_int != ',' as i32 {
                 break;
             }
             stringPtr = stringPtr.offset(1);
-        } else if longCommandWArg(
-            &mut stringPtr,
-            b"shrink\0" as *const u8 as *const core::ffi::c_char,
-        ) != 0
-        {
+        } else if longCommandWArg(&mut stringPtr, c"shrink".as_ptr()) != 0 {
             (*params).shrinkDictMaxRegression = kDefaultRegression;
             (*params).shrinkDict = 1;
             if *stringPtr.offset(0) as core::ffi::c_int == '=' as i32 {
@@ -1044,8 +882,7 @@ unsafe fn parseFastCoverParameters(
     if g_displayLevel >= 4 {
         fprintf(
             stderr,
-            b"cover: k=%u\nd=%u\nf=%u\nsteps=%u\nsplit=%u\naccel=%u\nshrink=%u\n\0" as *const u8
-                as *const core::ffi::c_char,
+            c"cover: k=%u\nd=%u\nf=%u\nsteps=%u\nsplit=%u\naccel=%u\nshrink=%u\n".as_ptr(),
             (*params).k,
             (*params).d,
             (*params).f,
@@ -1061,14 +898,8 @@ unsafe fn parseLegacyParameters(
     mut stringPtr: *const core::ffi::c_char,
     selectivity: *mut core::ffi::c_uint,
 ) -> core::ffi::c_uint {
-    if longCommandWArg(
-        &mut stringPtr,
-        b"s=\0" as *const u8 as *const core::ffi::c_char,
-    ) == 0
-        && longCommandWArg(
-            &mut stringPtr,
-            b"selectivity=\0" as *const u8 as *const core::ffi::c_char,
-        ) == 0
+    if longCommandWArg(&mut stringPtr, c"s=".as_ptr()) == 0
+        && longCommandWArg(&mut stringPtr, c"selectivity=".as_ptr()) == 0
     {
         return 0;
     }
@@ -1077,35 +908,33 @@ unsafe fn parseLegacyParameters(
         return 0;
     }
     if g_displayLevel >= 4 {
-        fprintf(
-            stderr,
-            b"legacy: selectivity=%u\n\0" as *const u8 as *const core::ffi::c_char,
-            *selectivity,
-        );
+        fprintf(stderr, c"legacy: selectivity=%u\n".as_ptr(), *selectivity);
     }
     1
 }
 
 fn defaultCoverParams() -> ZDICT_cover_params_t {
-    let mut params = ZDICT_cover_params_t::default();
-    params.d = 8;
-    params.steps = 4;
-    params.splitPoint = 1.0f64;
-    params.shrinkDict = 0;
-    params.shrinkDictMaxRegression = kDefaultRegression;
-    params
+    ZDICT_cover_params_t {
+        d: 8,
+        steps: 4,
+        splitPoint: 1.0f64,
+        shrinkDict: 0,
+        shrinkDictMaxRegression: kDefaultRegression,
+        ..Default::default()
+    }
 }
 
 fn defaultFastCoverParams() -> ZDICT_fastCover_params_t {
-    let mut params = ZDICT_fastCover_params_t::default();
-    params.d = 8;
-    params.f = 20;
-    params.steps = 4;
-    params.splitPoint = 0.75f64;
-    params.accel = DEFAULT_ACCEL as core::ffi::c_uint;
-    params.shrinkDict = 0;
-    params.shrinkDictMaxRegression = kDefaultRegression;
-    params
+    ZDICT_fastCover_params_t {
+        d: 8,
+        f: 20,
+        steps: 4,
+        splitPoint: 0.75f64,
+        accel: DEFAULT_ACCEL as core::ffi::c_uint,
+        shrinkDict: 0,
+        shrinkDictMaxRegression: kDefaultRegression,
+        ..Default::default()
+    }
 }
 
 unsafe fn parseAdaptParameters(
@@ -1114,21 +943,13 @@ unsafe fn parseAdaptParameters(
     adaptMaxPtr: *mut core::ffi::c_int,
 ) -> core::ffi::c_uint {
     loop {
-        if longCommandWArg(
-            &mut stringPtr,
-            b"min=\0" as *const u8 as *const core::ffi::c_char,
-        ) != 0
-        {
+        if longCommandWArg(&mut stringPtr, c"min=".as_ptr()) != 0 {
             *adaptMinPtr = readIntFromChar(&mut stringPtr);
             if *stringPtr.offset(0) as core::ffi::c_int != ',' as i32 {
                 break;
             }
             stringPtr = stringPtr.offset(1);
-        } else if longCommandWArg(
-            &mut stringPtr,
-            b"max=\0" as *const u8 as *const core::ffi::c_char,
-        ) != 0
-        {
+        } else if longCommandWArg(&mut stringPtr, c"max=".as_ptr()) != 0 {
             *adaptMaxPtr = readIntFromChar(&mut stringPtr);
             if *stringPtr.offset(0) as core::ffi::c_int != ',' as i32 {
                 break;
@@ -1136,10 +957,7 @@ unsafe fn parseAdaptParameters(
             stringPtr = stringPtr.offset(1);
         } else {
             if g_displayLevel >= 4 {
-                fprintf(
-                    stderr,
-                    b"invalid compression parameter \n\0" as *const u8 as *const core::ffi::c_char,
-                );
+                fprintf(stderr, c"invalid compression parameter \n".as_ptr());
             }
             return 0;
         }
@@ -1149,10 +967,7 @@ unsafe fn parseAdaptParameters(
     }
     if *adaptMinPtr > *adaptMaxPtr {
         if g_displayLevel >= 4 {
-            fprintf(
-                stderr,
-                b"incoherent adaptation limits \n\0" as *const u8 as *const core::ffi::c_char,
-            );
+            fprintf(stderr, c"incoherent adaptation limits \n".as_ptr());
         }
         return 0;
     }
@@ -1163,168 +978,96 @@ unsafe fn parseCompressionParameters(
     params: *mut ZSTD_compressionParameters,
 ) -> core::ffi::c_uint {
     loop {
-        if longCommandWArg(
-            &mut stringPtr,
-            b"windowLog=\0" as *const u8 as *const core::ffi::c_char,
-        ) != 0
-            || longCommandWArg(
-                &mut stringPtr,
-                b"wlog=\0" as *const u8 as *const core::ffi::c_char,
-            ) != 0
+        if longCommandWArg(&mut stringPtr, c"windowLog=".as_ptr()) != 0
+            || longCommandWArg(&mut stringPtr, c"wlog=".as_ptr()) != 0
         {
             (*params).windowLog = readU32FromChar(&mut stringPtr);
             if *stringPtr.offset(0) as core::ffi::c_int != ',' as i32 {
                 break;
             }
             stringPtr = stringPtr.offset(1);
-        } else if longCommandWArg(
-            &mut stringPtr,
-            b"chainLog=\0" as *const u8 as *const core::ffi::c_char,
-        ) != 0
-            || longCommandWArg(
-                &mut stringPtr,
-                b"clog=\0" as *const u8 as *const core::ffi::c_char,
-            ) != 0
+        } else if longCommandWArg(&mut stringPtr, c"chainLog=".as_ptr()) != 0
+            || longCommandWArg(&mut stringPtr, c"clog=".as_ptr()) != 0
         {
             (*params).chainLog = readU32FromChar(&mut stringPtr);
             if *stringPtr.offset(0) as core::ffi::c_int != ',' as i32 {
                 break;
             }
             stringPtr = stringPtr.offset(1);
-        } else if longCommandWArg(
-            &mut stringPtr,
-            b"hashLog=\0" as *const u8 as *const core::ffi::c_char,
-        ) != 0
-            || longCommandWArg(
-                &mut stringPtr,
-                b"hlog=\0" as *const u8 as *const core::ffi::c_char,
-            ) != 0
+        } else if longCommandWArg(&mut stringPtr, c"hashLog=".as_ptr()) != 0
+            || longCommandWArg(&mut stringPtr, c"hlog=".as_ptr()) != 0
         {
             (*params).hashLog = readU32FromChar(&mut stringPtr);
             if *stringPtr.offset(0) as core::ffi::c_int != ',' as i32 {
                 break;
             }
             stringPtr = stringPtr.offset(1);
-        } else if longCommandWArg(
-            &mut stringPtr,
-            b"searchLog=\0" as *const u8 as *const core::ffi::c_char,
-        ) != 0
-            || longCommandWArg(
-                &mut stringPtr,
-                b"slog=\0" as *const u8 as *const core::ffi::c_char,
-            ) != 0
+        } else if longCommandWArg(&mut stringPtr, c"searchLog=".as_ptr()) != 0
+            || longCommandWArg(&mut stringPtr, c"slog=".as_ptr()) != 0
         {
             (*params).searchLog = readU32FromChar(&mut stringPtr);
             if *stringPtr.offset(0) as core::ffi::c_int != ',' as i32 {
                 break;
             }
             stringPtr = stringPtr.offset(1);
-        } else if longCommandWArg(
-            &mut stringPtr,
-            b"minMatch=\0" as *const u8 as *const core::ffi::c_char,
-        ) != 0
-            || longCommandWArg(
-                &mut stringPtr,
-                b"mml=\0" as *const u8 as *const core::ffi::c_char,
-            ) != 0
+        } else if longCommandWArg(&mut stringPtr, c"minMatch=".as_ptr()) != 0
+            || longCommandWArg(&mut stringPtr, c"mml=".as_ptr()) != 0
         {
             (*params).minMatch = readU32FromChar(&mut stringPtr);
             if *stringPtr.offset(0) as core::ffi::c_int != ',' as i32 {
                 break;
             }
             stringPtr = stringPtr.offset(1);
-        } else if longCommandWArg(
-            &mut stringPtr,
-            b"targetLength=\0" as *const u8 as *const core::ffi::c_char,
-        ) != 0
-            || longCommandWArg(
-                &mut stringPtr,
-                b"tlen=\0" as *const u8 as *const core::ffi::c_char,
-            ) != 0
+        } else if longCommandWArg(&mut stringPtr, c"targetLength=".as_ptr()) != 0
+            || longCommandWArg(&mut stringPtr, c"tlen=".as_ptr()) != 0
         {
             (*params).targetLength = readU32FromChar(&mut stringPtr);
             if *stringPtr.offset(0) as core::ffi::c_int != ',' as i32 {
                 break;
             }
             stringPtr = stringPtr.offset(1);
-        } else if longCommandWArg(
-            &mut stringPtr,
-            b"strategy=\0" as *const u8 as *const core::ffi::c_char,
-        ) != 0
-            || longCommandWArg(
-                &mut stringPtr,
-                b"strat=\0" as *const u8 as *const core::ffi::c_char,
-            ) != 0
+        } else if longCommandWArg(&mut stringPtr, c"strategy=".as_ptr()) != 0
+            || longCommandWArg(&mut stringPtr, c"strat=".as_ptr()) != 0
         {
             (*params).strategy = readU32FromChar(&mut stringPtr) as ZSTD_strategy;
             if *stringPtr.offset(0) as core::ffi::c_int != ',' as i32 {
                 break;
             }
             stringPtr = stringPtr.offset(1);
-        } else if longCommandWArg(
-            &mut stringPtr,
-            b"overlapLog=\0" as *const u8 as *const core::ffi::c_char,
-        ) != 0
-            || longCommandWArg(
-                &mut stringPtr,
-                b"ovlog=\0" as *const u8 as *const core::ffi::c_char,
-            ) != 0
+        } else if longCommandWArg(&mut stringPtr, c"overlapLog=".as_ptr()) != 0
+            || longCommandWArg(&mut stringPtr, c"ovlog=".as_ptr()) != 0
         {
             g_overlapLog = readU32FromChar(&mut stringPtr);
             if *stringPtr.offset(0) as core::ffi::c_int != ',' as i32 {
                 break;
             }
             stringPtr = stringPtr.offset(1);
-        } else if longCommandWArg(
-            &mut stringPtr,
-            b"ldmHashLog=\0" as *const u8 as *const core::ffi::c_char,
-        ) != 0
-            || longCommandWArg(
-                &mut stringPtr,
-                b"lhlog=\0" as *const u8 as *const core::ffi::c_char,
-            ) != 0
+        } else if longCommandWArg(&mut stringPtr, c"ldmHashLog=".as_ptr()) != 0
+            || longCommandWArg(&mut stringPtr, c"lhlog=".as_ptr()) != 0
         {
             g_ldmHashLog = readU32FromChar(&mut stringPtr);
             if *stringPtr.offset(0) as core::ffi::c_int != ',' as i32 {
                 break;
             }
             stringPtr = stringPtr.offset(1);
-        } else if longCommandWArg(
-            &mut stringPtr,
-            b"ldmMinMatch=\0" as *const u8 as *const core::ffi::c_char,
-        ) != 0
-            || longCommandWArg(
-                &mut stringPtr,
-                b"lmml=\0" as *const u8 as *const core::ffi::c_char,
-            ) != 0
+        } else if longCommandWArg(&mut stringPtr, c"ldmMinMatch=".as_ptr()) != 0
+            || longCommandWArg(&mut stringPtr, c"lmml=".as_ptr()) != 0
         {
             g_ldmMinMatch = readU32FromChar(&mut stringPtr);
             if *stringPtr.offset(0) as core::ffi::c_int != ',' as i32 {
                 break;
             }
             stringPtr = stringPtr.offset(1);
-        } else if longCommandWArg(
-            &mut stringPtr,
-            b"ldmBucketSizeLog=\0" as *const u8 as *const core::ffi::c_char,
-        ) != 0
-            || longCommandWArg(
-                &mut stringPtr,
-                b"lblog=\0" as *const u8 as *const core::ffi::c_char,
-            ) != 0
+        } else if longCommandWArg(&mut stringPtr, c"ldmBucketSizeLog=".as_ptr()) != 0
+            || longCommandWArg(&mut stringPtr, c"lblog=".as_ptr()) != 0
         {
             g_ldmBucketSizeLog = readU32FromChar(&mut stringPtr);
             if *stringPtr.offset(0) as core::ffi::c_int != ',' as i32 {
                 break;
             }
             stringPtr = stringPtr.offset(1);
-        } else if longCommandWArg(
-            &mut stringPtr,
-            b"ldmHashRateLog=\0" as *const u8 as *const core::ffi::c_char,
-        ) != 0
-            || longCommandWArg(
-                &mut stringPtr,
-                b"lhrlog=\0" as *const u8 as *const core::ffi::c_char,
-            ) != 0
+        } else if longCommandWArg(&mut stringPtr, c"ldmHashRateLog=".as_ptr()) != 0
+            || longCommandWArg(&mut stringPtr, c"lhrlog=".as_ptr()) != 0
         {
             g_ldmHashRateLog = readU32FromChar(&mut stringPtr);
             if *stringPtr.offset(0) as core::ffi::c_int != ',' as i32 {
@@ -1333,10 +1076,7 @@ unsafe fn parseCompressionParameters(
             stringPtr = stringPtr.offset(1);
         } else {
             if g_displayLevel >= 4 {
-                fprintf(
-                    stderr,
-                    b"invalid compression parameter \n\0" as *const u8 as *const core::ffi::c_char,
-                );
+                fprintf(stderr, c"invalid compression parameter \n".as_ptr());
             }
             return 0;
         }
@@ -1347,131 +1087,52 @@ unsafe fn parseCompressionParameters(
     1
 }
 unsafe fn setMaxCompression(params: *mut ZSTD_compressionParameters) {
-    (*params).windowLog = (if ::core::mem::size_of::<size_t>() == 4 {
-        ZSTD_WINDOWLOG_MAX_32
-    } else {
-        ZSTD_WINDOWLOG_MAX_64
-    }) as core::ffi::c_uint;
-    (*params).chainLog = (if ::core::mem::size_of::<size_t>() == 4 {
-        ZSTD_CHAINLOG_MAX_32
-    } else {
-        ZSTD_CHAINLOG_MAX_64
-    }) as core::ffi::c_uint;
-    (*params).hashLog = (if (if ::core::mem::size_of::<size_t>() == 4 {
-        ZSTD_WINDOWLOG_MAX_32
-    } else {
-        ZSTD_WINDOWLOG_MAX_64
-    }) < 30
-    {
-        if ::core::mem::size_of::<size_t>() == 4 {
-            ZSTD_WINDOWLOG_MAX_32
-        } else {
-            ZSTD_WINDOWLOG_MAX_64
-        }
-    } else {
-        30
-    }) as core::ffi::c_uint;
-    (*params).searchLog = ((if ::core::mem::size_of::<size_t>() == 4 {
-        ZSTD_WINDOWLOG_MAX_32
-    } else {
-        ZSTD_WINDOWLOG_MAX_64
-    }) - 1) as core::ffi::c_uint;
+    (*params).windowLog = ZSTD_WINDOWLOG_MAX as core::ffi::c_uint;
+    (*params).chainLog = ZSTD_CHAINLOG_MAX as core::ffi::c_uint;
+    (*params).hashLog = ZSTD_HASHLOG_MAX as core::ffi::c_uint;
+    (*params).searchLog = ZSTD_SEARCHLOG_MAX as core::ffi::c_uint;
     (*params).minMatch = ZSTD_MINMATCH_MIN as core::ffi::c_uint;
     (*params).targetLength = ZSTD_TARGETLENGTH_MAX as core::ffi::c_uint;
     (*params).strategy = ZSTD_STRATEGY_MAX as ZSTD_strategy;
     g_overlapLog = ZSTD_OVERLAPLOG_MAX as u32;
-    g_ldmHashLog = (if (if ::core::mem::size_of::<size_t>() == 4 {
-        ZSTD_WINDOWLOG_MAX_32
-    } else {
-        ZSTD_WINDOWLOG_MAX_64
-    }) < 30
-    {
-        if ::core::mem::size_of::<size_t>() == 4 {
-            ZSTD_WINDOWLOG_MAX_32
-        } else {
-            ZSTD_WINDOWLOG_MAX_64
-        }
-    } else {
-        30
-    }) as u32;
+    g_ldmHashLog = ZSTD_LDM_HASHLOG_MAX as u32;
     g_ldmHashRateLog = 0;
     g_ldmMinMatch = 16;
     g_ldmBucketSizeLog = ZSTD_LDM_BUCKETSIZELOG_MAX as u32;
 }
 unsafe fn printVersion() {
     if g_displayLevel < DISPLAY_LEVEL_DEFAULT {
-        fprintf(
-            stdout,
-            b"%s\n\0" as *const u8 as *const core::ffi::c_char,
-            b"1.5.8\0" as *const u8 as *const core::ffi::c_char,
-        );
+        fprintf(stdout, c"%s\n".as_ptr(), c"1.5.8".as_ptr());
         return;
     }
     fprintf(
         stdout,
-        b"*** %s (%i-bit) %s, by %s ***\n\0" as *const u8 as *const core::ffi::c_char,
-        b"Zstandard CLI\0" as *const u8 as *const core::ffi::c_char,
-        (::core::mem::size_of::<size_t>()).wrapping_mul(8) as core::ffi::c_int,
-        b"v1.5.8\0" as *const u8 as *const core::ffi::c_char,
-        b"Yann Collet\0" as *const u8 as *const core::ffi::c_char,
+        c"*** %s (%i-bit) %s, by %s ***\n".as_ptr(),
+        c"Zstandard CLI".as_ptr(),
+        size_t::BITS as core::ffi::c_int,
+        c"v1.5.8".as_ptr(),
+        c"Yann Collet".as_ptr(),
     );
     if g_displayLevel >= 3 {
-        fprintf(
-            stdout,
-            b"*** supports: zstd\0" as *const u8 as *const core::ffi::c_char,
-        );
-        fprintf(
-            stdout,
-            b", zstd legacy v0.%d+\0" as *const u8 as *const core::ffi::c_char,
-            5,
-        );
-        fprintf(stdout, b", gzip\0" as *const u8 as *const core::ffi::c_char);
-        fprintf(
-            stdout,
-            b", lzma, xz \0" as *const u8 as *const core::ffi::c_char,
-        );
-        fprintf(stdout, b"\n\0" as *const u8 as *const core::ffi::c_char);
+        fprintf(stdout, c"*** supports: zstd".as_ptr());
+        fprintf(stdout, c", zstd legacy v0.%d+".as_ptr(), 5);
+        fprintf(stdout, c", gzip".as_ptr());
+        fprintf(stdout, c", lzma, xz ".as_ptr());
+        fprintf(stdout, c"\n".as_ptr());
         if g_displayLevel >= 4 {
+            fprintf(stdout, c"zlib version %s\n".as_ptr(), FIO_zlibVersion());
+            fprintf(stdout, c"lz4 version %s\n".as_ptr(), FIO_lz4Version());
+            fprintf(stdout, c"lzma version %s\n".as_ptr(), FIO_lzmaVersion());
+            fprintf(stdout, c"supports Multithreading \n".as_ptr());
+            fprintf(stdout, c"_POSIX_C_SOURCE defined: %ldL\n".as_ptr(), 200809);
+            fprintf(stdout, c"_POSIX_VERSION defined: %ldL \n".as_ptr(), 200809);
             fprintf(
                 stdout,
-                b"zlib version %s\n\0" as *const u8 as *const core::ffi::c_char,
-                FIO_zlibVersion(),
-            );
-            fprintf(
-                stdout,
-                b"lz4 version %s\n\0" as *const u8 as *const core::ffi::c_char,
-                FIO_lz4Version(),
-            );
-            fprintf(
-                stdout,
-                b"lzma version %s\n\0" as *const u8 as *const core::ffi::c_char,
-                FIO_lzmaVersion(),
-            );
-            fprintf(
-                stdout,
-                b"supports Multithreading \n\0" as *const u8 as *const core::ffi::c_char,
-            );
-            fprintf(
-                stdout,
-                b"_POSIX_C_SOURCE defined: %ldL\n\0" as *const u8 as *const core::ffi::c_char,
-                200809,
-            );
-            fprintf(
-                stdout,
-                b"_POSIX_VERSION defined: %ldL \n\0" as *const u8 as *const core::ffi::c_char,
-                200809,
-            );
-            fprintf(
-                stdout,
-                b"PLATFORM_POSIX_VERSION defined: %ldL\n\0" as *const u8
-                    as *const core::ffi::c_char,
+                c"PLATFORM_POSIX_VERSION defined: %ldL\n".as_ptr(),
                 200809,
             );
             if ZSTD_isDeterministicBuild() == 0 {
-                fprintf(
-                    stdout,
-                    b"non-deterministic build\n\0" as *const u8 as *const core::ffi::c_char,
-                );
+                fprintf(stdout, c"non-deterministic build\n".as_ptr());
             }
         }
     }
@@ -1502,47 +1163,34 @@ unsafe fn printDefaultCParams(
     };
     let cParams = ZSTD_getCParams(cLevel, fileSize, dictSize);
     if fileSize != UTIL_FILESIZE_UNKNOWN as core::ffi::c_ulonglong {
-        fprintf(
-            stderr,
-            b"%s (%llu bytes)\n\0" as *const u8 as *const core::ffi::c_char,
-            filename,
-            fileSize,
-        );
+        fprintf(stderr, c"%s (%llu bytes)\n".as_ptr(), filename, fileSize);
     } else {
-        fprintf(
-            stderr,
-            b"%s (src size unknown)\n\0" as *const u8 as *const core::ffi::c_char,
-            filename,
-        );
+        fprintf(stderr, c"%s (src size unknown)\n".as_ptr(), filename);
     }
     fprintf(
         stderr,
-        b" - windowLog     : %u\n\0" as *const u8 as *const core::ffi::c_char,
+        c" - windowLog     : %u\n".as_ptr(),
         cParams.windowLog,
     );
     fprintf(
         stderr,
-        b" - chainLog      : %u\n\0" as *const u8 as *const core::ffi::c_char,
+        c" - chainLog      : %u\n".as_ptr(),
         cParams.chainLog,
     );
+    fprintf(stderr, c" - hashLog       : %u\n".as_ptr(), cParams.hashLog);
     fprintf(
         stderr,
-        b" - hashLog       : %u\n\0" as *const u8 as *const core::ffi::c_char,
-        cParams.hashLog,
-    );
-    fprintf(
-        stderr,
-        b" - searchLog     : %u\n\0" as *const u8 as *const core::ffi::c_char,
+        c" - searchLog     : %u\n".as_ptr(),
         cParams.searchLog,
     );
     fprintf(
         stderr,
-        b" - minMatch      : %u\n\0" as *const u8 as *const core::ffi::c_char,
+        c" - minMatch      : %u\n".as_ptr(),
         cParams.minMatch,
     );
     fprintf(
         stderr,
-        b" - targetLength  : %u\n\0" as *const u8 as *const core::ffi::c_char,
+        c" - targetLength  : %u\n".as_ptr(),
         cParams.targetLength,
     );
     assert!(
@@ -1550,7 +1198,7 @@ unsafe fn printDefaultCParams(
     );
     fprintf(
         stderr,
-        b" - strategy      : %s (%u)\n\0" as *const u8 as *const core::ffi::c_char,
+        c" - strategy      : %s (%u)\n".as_ptr(),
         ZSTD_strategyMap[cParams.strategy as usize].as_ptr(),
         cParams.strategy as core::ffi::c_uint,
     );
@@ -1606,8 +1254,7 @@ unsafe fn printActualCParams(
     }) as ZSTD_strategy;
     fprintf(
         stderr,
-        b"--zstd=wlog=%d,clog=%d,hlog=%d,slog=%d,mml=%d,tlen=%d,strat=%d\n\0" as *const u8
-            as *const core::ffi::c_char,
+        c"--zstd=wlog=%d,clog=%d,hlog=%d,slog=%d,mml=%d,tlen=%d,strat=%d\n".as_ptr(),
         actualCParams.windowLog,
         actualCParams.chainLog,
         actualCParams.hashLog,
@@ -1636,9 +1283,9 @@ unsafe fn init_cLevel() -> core::ffi::c_int {
                 if g_displayLevel >= 2 {
                     fprintf(
                         stderr,
-                        b"Ignore environment variable setting %s=%s: numeric value too large \n\0"
-                            as *const u8 as *const core::ffi::c_char,
-                        b"ZSTD_CLEVEL\0" as *const u8 as *const core::ffi::c_char,
+                        c"Ignore environment variable setting %s=%s: numeric value too large \n"
+                            .as_ptr(),
+                        c"ZSTD_CLEVEL".as_ptr(),
                         env,
                     );
                 }
@@ -1650,9 +1297,8 @@ unsafe fn init_cLevel() -> core::ffi::c_int {
         if g_displayLevel >= 2 {
             fprintf(
                 stderr,
-                b"Ignore environment variable setting %s=%s: not a valid integer value \n\0"
-                    as *const u8 as *const core::ffi::c_char,
-                b"ZSTD_CLEVEL\0" as *const u8 as *const core::ffi::c_char,
+                c"Ignore environment variable setting %s=%s: not a valid integer value \n".as_ptr(),
+                c"ZSTD_CLEVEL".as_ptr(),
                 env,
             );
         }
@@ -1669,9 +1315,9 @@ unsafe fn init_nbWorkers() -> core::ffi::c_uint {
                 if g_displayLevel >= 2 {
                     fprintf(
                         stderr,
-                        b"Ignore environment variable setting %s=%s: numeric value too large \n\0"
-                            as *const u8 as *const core::ffi::c_char,
-                        b"ZSTD_NBTHREADS\0" as *const u8 as *const core::ffi::c_char,
+                        c"Ignore environment variable setting %s=%s: numeric value too large \n"
+                            .as_ptr(),
+                        c"ZSTD_NBTHREADS".as_ptr(),
                         env,
                     );
                 }
@@ -1694,9 +1340,9 @@ unsafe fn init_nbWorkers() -> core::ffi::c_uint {
         if g_displayLevel >= 2 {
             fprintf(
                 stderr,
-                b"Ignore environment variable setting %s=%s: not a valid unsigned value \n\0"
-                    as *const u8 as *const core::ffi::c_char,
-                b"ZSTD_NBTHREADS\0" as *const u8 as *const core::ffi::c_char,
+                c"Ignore environment variable setting %s=%s: not a valid unsigned value \n"
+                    .as_ptr(),
+                c"ZSTD_NBTHREADS".as_ptr(),
                 env,
             );
         }
@@ -1747,8 +1393,8 @@ unsafe fn main_0(
     let mut cLevelLast = MINCLEVEL - 1;
     let mut setThreads_non1 = 0;
     let mut nbWorkers = init_nbWorkers();
-    let mut mmapDict = ZSTD_ParamSwitch_e::ZSTD_ps_auto;
-    let mut useRowMatchFinder = ZSTD_ParamSwitch_e::ZSTD_ps_auto;
+    let mut mmapDict = ParamSwitch::Auto;
+    let mut useRowMatchFinder = ParamSwitch::Auto;
     let mut cType = FIO_zstdCompression;
     let mut compressibility = -1.0f64;
     let mut bench_nbSeconds = 3;
@@ -1789,15 +1435,12 @@ unsafe fn main_0(
     let mut fastCoverParams = defaultFastCoverParams();
     let mut dict = fastCover;
     let mut benchParams = BMK_initAdvancedParams();
-    let mut literalCompressionMode = ZSTD_ParamSwitch_e::ZSTD_ps_auto;
+    let mut literalCompressionMode = ParamSwitch::Auto;
     checkLibVersion();
     assert!(argCount >= 1);
     if filenames.is_null() || file_of_names.is_null() {
         if g_displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"zstd: allocation error \n\0" as *const u8 as *const core::ffi::c_char,
-            );
+            fprintf(stderr, c"zstd: allocation error \n".as_ptr());
         }
         exit(1);
     }
@@ -1878,7 +1521,7 @@ unsafe fn main_0(
     ptr::write_bytes(
         &mut compressionParams as *mut ZSTD_compressionParameters as *mut u8,
         0,
-        ::core::mem::size_of::<ZSTD_compressionParameters>(),
+        size_of::<ZSTD_compressionParameters>(),
     );
     FIO_addAbortHandler();
     argNb = 1;
@@ -1955,365 +1598,148 @@ unsafe fn main_0(
             if !argument.is_null() {
                 if nextArgumentsAreFiles != 0 {
                     UTIL_refFilename(filenames, argument);
-                } else if strcmp(argument, b"-\0" as *const u8 as *const core::ffi::c_char) == 0 {
+                } else if strcmp(argument, c"-".as_ptr()) == 0 {
                     UTIL_refFilename(filenames, stdinmark.as_ptr());
                 } else if *argument.offset(0) as core::ffi::c_int == '-' as i32 {
                     if *argument.offset(1) as core::ffi::c_int == '-' as i32 {
-                        if strcmp(argument, b"--\0" as *const u8 as *const core::ffi::c_char) == 0 {
+                        if strcmp(argument, c"--".as_ptr()) == 0 {
                             nextArgumentsAreFiles = 1;
-                        } else if strcmp(
-                            argument,
-                            b"--list\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
-                        {
+                        } else if strcmp(argument, c"--list".as_ptr()) == 0 {
                             operation = zom_list;
-                        } else if strcmp(
-                            argument,
-                            b"--compress\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
-                        {
+                        } else if strcmp(argument, c"--compress".as_ptr()) == 0 {
                             operation = zom_compress;
-                        } else if strcmp(
-                            argument,
-                            b"--decompress\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
+                        } else if strcmp(argument, c"--decompress".as_ptr()) == 0
+                            || strcmp(argument, c"--uncompress".as_ptr()) == 0
                         {
                             operation = zom_decompress;
-                        } else if strcmp(
-                            argument,
-                            b"--uncompress\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
-                        {
-                            operation = zom_decompress;
-                        } else if strcmp(
-                            argument,
-                            b"--force\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
-                        {
+                        } else if strcmp(argument, c"--force".as_ptr()) == 0 {
                             FIO_overwriteMode(prefs);
                             forceStdin = 1;
                             forceStdout = 1;
                             followLinks = 1;
                             allowBlockDevices = 1;
-                        } else if strcmp(
-                            argument,
-                            b"--version\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
-                        {
+                        } else if strcmp(argument, c"--version".as_ptr()) == 0 {
                             printVersion();
                             operationResult = 0;
                             break 'end;
-                        } else if strcmp(
-                            argument,
-                            b"--help\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
-                        {
+                        } else if strcmp(argument, c"--help".as_ptr()) == 0 {
                             usageAdvanced(programName);
                             operationResult = 0;
                             break 'end;
-                        } else if strcmp(
-                            argument,
-                            b"--verbose\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
-                        {
+                        } else if strcmp(argument, c"--verbose".as_ptr()) == 0 {
                             g_displayLevel += 1;
-                        } else if strcmp(
-                            argument,
-                            b"--quiet\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
-                        {
+                        } else if strcmp(argument, c"--quiet".as_ptr()) == 0 {
                             g_displayLevel -= 1;
-                        } else if strcmp(
-                            argument,
-                            b"--stdout\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
-                        {
+                        } else if strcmp(argument, c"--stdout".as_ptr()) == 0 {
                             forceStdout = 1;
                             outFileName = stdoutmark.as_ptr();
-                        } else if strcmp(
-                            argument,
-                            b"--ultra\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
-                        {
+                        } else if strcmp(argument, c"--ultra".as_ptr()) == 0 {
                             ultra = 1;
-                        } else if strcmp(
-                            argument,
-                            b"--check\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
-                        {
+                        } else if strcmp(argument, c"--check".as_ptr()) == 0 {
                             FIO_setChecksumFlag(prefs, 2);
-                        } else if strcmp(
-                            argument,
-                            b"--no-check\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
-                        {
+                        } else if strcmp(argument, c"--no-check".as_ptr()) == 0 {
                             FIO_setChecksumFlag(prefs, 0);
-                        } else if strcmp(
-                            argument,
-                            b"--sparse\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
-                        {
+                        } else if strcmp(argument, c"--sparse".as_ptr()) == 0 {
                             FIO_setSparseWrite(prefs, 2);
-                        } else if strcmp(
-                            argument,
-                            b"--no-sparse\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
-                        {
+                        } else if strcmp(argument, c"--no-sparse".as_ptr()) == 0 {
                             FIO_setSparseWrite(prefs, 0);
-                        } else if strcmp(
-                            argument,
-                            b"--pass-through\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
-                        {
+                        } else if strcmp(argument, c"--pass-through".as_ptr()) == 0 {
                             FIO_setPassThroughFlag(prefs, 1);
-                        } else if strcmp(
-                            argument,
-                            b"--no-pass-through\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
-                        {
+                        } else if strcmp(argument, c"--no-pass-through".as_ptr()) == 0 {
                             FIO_setPassThroughFlag(prefs, 0);
-                        } else if strcmp(
-                            argument,
-                            b"--test\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
-                        {
+                        } else if strcmp(argument, c"--test".as_ptr()) == 0 {
                             operation = zom_test;
-                        } else if strcmp(
-                            argument,
-                            b"--asyncio\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
-                        {
+                        } else if strcmp(argument, c"--asyncio".as_ptr()) == 0 {
                             FIO_setAsyncIOFlag(prefs, 1);
-                        } else if strcmp(
-                            argument,
-                            b"--no-asyncio\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
-                        {
+                        } else if strcmp(argument, c"--no-asyncio".as_ptr()) == 0 {
                             FIO_setAsyncIOFlag(prefs, 0);
-                        } else if strcmp(
-                            argument,
-                            b"--train\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
-                        {
+                        } else if strcmp(argument, c"--train".as_ptr()) == 0 {
                             operation = zom_train;
                             if outFileName.is_null() {
                                 outFileName = g_defaultDictName;
                             }
-                        } else if strcmp(
-                            argument,
-                            b"--no-dictID\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
-                        {
+                        } else if strcmp(argument, c"--no-dictID".as_ptr()) == 0 {
                             FIO_setDictIDFlag(prefs, 0);
-                        } else if strcmp(
-                            argument,
-                            b"--keep\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
-                        {
+                        } else if strcmp(argument, c"--keep".as_ptr()) == 0 {
                             removeSrcFile = 0;
-                        } else if strcmp(
-                            argument,
-                            b"--rm\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
-                        {
+                        } else if strcmp(argument, c"--rm".as_ptr()) == 0 {
                             removeSrcFile = 1;
-                        } else if strcmp(
-                            argument,
-                            b"--priority=rt\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
-                        {
+                        } else if strcmp(argument, c"--priority=rt".as_ptr()) == 0 {
                             setRealTimePrio = 1;
-                        } else if strcmp(
-                            argument,
-                            b"--show-default-cparams\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
-                        {
+                        } else if strcmp(argument, c"--show-default-cparams".as_ptr()) == 0 {
                             showDefaultCParams = 1;
-                        } else if strcmp(
-                            argument,
-                            b"--content-size\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
-                        {
+                        } else if strcmp(argument, c"--content-size".as_ptr()) == 0 {
                             contentSize = 1;
-                        } else if strcmp(
-                            argument,
-                            b"--no-content-size\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
-                        {
+                        } else if strcmp(argument, c"--no-content-size".as_ptr()) == 0 {
                             contentSize = 0;
-                        } else if strcmp(
-                            argument,
-                            b"--adapt\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
-                        {
+                        } else if strcmp(argument, c"--adapt".as_ptr()) == 0 {
                             adapt = 1;
-                        } else if strcmp(
-                            argument,
-                            b"--no-row-match-finder\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
-                        {
-                            useRowMatchFinder = ZSTD_ParamSwitch_e::ZSTD_ps_disable;
-                        } else if strcmp(
-                            argument,
-                            b"--row-match-finder\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
-                        {
-                            useRowMatchFinder = ZSTD_ParamSwitch_e::ZSTD_ps_enable;
-                        } else if longCommandWArg(
-                            &mut argument,
-                            b"--adapt=\0" as *const u8 as *const core::ffi::c_char,
-                        ) != 0
-                        {
+                        } else if strcmp(argument, c"--no-row-match-finder".as_ptr()) == 0 {
+                            useRowMatchFinder = ParamSwitch::Disable;
+                        } else if strcmp(argument, c"--row-match-finder".as_ptr()) == 0 {
+                            useRowMatchFinder = ParamSwitch::Enable;
+                        } else if longCommandWArg(&mut argument, c"--adapt=".as_ptr()) != 0 {
                             adapt = 1;
                             if parseAdaptParameters(argument, &mut adaptMin, &mut adaptMax) == 0 {
                                 badUsage(programName, originalArgument);
                                 operationResult = 1;
                                 break 'end;
                             }
-                        } else if strcmp(
-                            argument,
-                            b"--single-thread\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
-                        {
+                        } else if strcmp(argument, c"--single-thread".as_ptr()) == 0 {
                             nbWorkers = 0;
                             singleThread = 1;
-                        } else if strcmp(
-                            argument,
-                            b"--format=zstd\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
-                        {
+                        } else if strcmp(argument, c"--format=zstd".as_ptr()) == 0 {
                             suffix = ZSTD_EXTENSION.as_ptr();
                             cType = FIO_zstdCompression;
-                        } else if strcmp(
-                            argument,
-                            b"--mmap-dict\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
-                        {
-                            mmapDict = ZSTD_ParamSwitch_e::ZSTD_ps_enable;
-                        } else if strcmp(
-                            argument,
-                            b"--no-mmap-dict\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
-                        {
-                            mmapDict = ZSTD_ParamSwitch_e::ZSTD_ps_disable;
-                        } else if strcmp(
-                            argument,
-                            b"--format=gzip\0" as *const u8 as *const core::ffi::c_char,
-                        ) == 0
-                        {
+                        } else if strcmp(argument, c"--mmap-dict".as_ptr()) == 0 {
+                            mmapDict = ParamSwitch::Enable;
+                        } else if strcmp(argument, c"--no-mmap-dict".as_ptr()) == 0 {
+                            mmapDict = ParamSwitch::Disable;
+                        } else if strcmp(argument, c"--format=gzip".as_ptr()) == 0 {
                             suffix = GZ_EXTENSION.as_ptr();
                             cType = FIO_gzipCompression;
                         } else {
                             if exeNameMatch(programName, ZSTD_GZ.as_ptr()) != 0 {
-                                if strcmp(
-                                    argument,
-                                    b"--best\0" as *const u8 as *const core::ffi::c_char,
-                                ) == 0
-                                {
+                                if strcmp(argument, c"--best".as_ptr()) == 0 {
                                     cLevel = 9;
                                     dictCLevel = cLevel;
                                     continue;
-                                } else if strcmp(
-                                    argument,
-                                    b"--no-name\0" as *const u8 as *const core::ffi::c_char,
-                                ) == 0
-                                {
+                                } else if strcmp(argument, c"--no-name".as_ptr()) == 0 {
                                     continue;
                                 }
                             }
-                            if strcmp(
-                                argument,
-                                b"--format=lzma\0" as *const u8 as *const core::ffi::c_char,
-                            ) == 0
-                            {
+                            if strcmp(argument, c"--format=lzma".as_ptr()) == 0 {
                                 suffix = LZMA_EXTENSION.as_ptr();
                                 cType = FIO_lzmaCompression;
-                            } else if strcmp(
-                                argument,
-                                b"--format=xz\0" as *const u8 as *const core::ffi::c_char,
-                            ) == 0
-                            {
+                            } else if strcmp(argument, c"--format=xz".as_ptr()) == 0 {
                                 suffix = XZ_EXTENSION.as_ptr();
                                 cType = FIO_xzCompression;
-                            } else if strcmp(
-                                argument,
-                                b"--rsyncable\0" as *const u8 as *const core::ffi::c_char,
-                            ) == 0
-                            {
+                            } else if strcmp(argument, c"--rsyncable".as_ptr()) == 0 {
                                 rsyncable = 1;
-                            } else if strcmp(
-                                argument,
-                                b"--compress-literals\0" as *const u8 as *const core::ffi::c_char,
-                            ) == 0
-                            {
-                                literalCompressionMode = ZSTD_ParamSwitch_e::ZSTD_ps_enable;
-                            } else if strcmp(
-                                argument,
-                                b"--no-compress-literals\0" as *const u8
-                                    as *const core::ffi::c_char,
-                            ) == 0
-                            {
-                                literalCompressionMode = ZSTD_ParamSwitch_e::ZSTD_ps_disable;
-                            } else if strcmp(
-                                argument,
-                                b"--no-progress\0" as *const u8 as *const core::ffi::c_char,
-                            ) == 0
-                            {
+                            } else if strcmp(argument, c"--compress-literals".as_ptr()) == 0 {
+                                literalCompressionMode = ParamSwitch::Enable;
+                            } else if strcmp(argument, c"--no-compress-literals".as_ptr()) == 0 {
+                                literalCompressionMode = ParamSwitch::Disable;
+                            } else if strcmp(argument, c"--no-progress".as_ptr()) == 0 {
                                 progress = FIO_ps_never;
-                            } else if strcmp(
-                                argument,
-                                b"--progress\0" as *const u8 as *const core::ffi::c_char,
-                            ) == 0
-                            {
+                            } else if strcmp(argument, c"--progress".as_ptr()) == 0 {
                                 progress = FIO_ps_always;
-                            } else if strcmp(
-                                argument,
-                                b"--exclude-compressed\0" as *const u8 as *const core::ffi::c_char,
-                            ) == 0
-                            {
+                            } else if strcmp(argument, c"--exclude-compressed".as_ptr()) == 0 {
                                 FIO_setExcludeCompressedFile(prefs, 1);
-                            } else if strcmp(
-                                argument,
-                                b"--fake-stdin-is-console\0" as *const u8
-                                    as *const core::ffi::c_char,
-                            ) == 0
-                            {
+                            } else if strcmp(argument, c"--fake-stdin-is-console".as_ptr()) == 0 {
                                 UTIL_fakeStdinIsConsole();
-                            } else if strcmp(
-                                argument,
-                                b"--fake-stdout-is-console\0" as *const u8
-                                    as *const core::ffi::c_char,
-                            ) == 0
-                            {
+                            } else if strcmp(argument, c"--fake-stdout-is-console".as_ptr()) == 0 {
                                 UTIL_fakeStdoutIsConsole();
-                            } else if strcmp(
-                                argument,
-                                b"--fake-stderr-is-console\0" as *const u8
-                                    as *const core::ffi::c_char,
-                            ) == 0
-                            {
+                            } else if strcmp(argument, c"--fake-stderr-is-console".as_ptr()) == 0 {
                                 UTIL_fakeStderrIsConsole();
-                            } else if strcmp(
-                                argument,
-                                b"--trace-file-stat\0" as *const u8 as *const core::ffi::c_char,
-                            ) == 0
-                            {
+                            } else if strcmp(argument, c"--trace-file-stat".as_ptr()) == 0 {
                                 UTIL_traceFileStat();
-                            } else if strcmp(
-                                argument,
-                                b"--max\0" as *const u8 as *const core::ffi::c_char,
-                            ) == 0
-                            {
-                                if ::core::mem::size_of::<*mut core::ffi::c_void>()
-                                    as core::ffi::c_ulong
-                                    == 4
-                                {
+                            } else if strcmp(argument, c"--max".as_ptr()) == 0 {
+                                if size_of::<*mut core::ffi::c_void>() as core::ffi::c_ulong == 4 {
                                     if g_displayLevel >= 2 {
                                         fprintf(
                                             stderr,
-                                            b"--max is incompatible with 32-bit mode \n\0"
-                                                as *const u8
-                                                as *const core::ffi::c_char,
+                                            c"--max is incompatible with 32-bit mode \n".as_ptr(),
                                         );
                                     }
                                     badUsage(programName, originalArgument);
@@ -2324,10 +1750,7 @@ unsafe fn main_0(
                                     ldmFlag = 1;
                                     setMaxCompression(&mut compressionParams);
                                 }
-                            } else if longCommandWArg(
-                                &mut argument,
-                                b"--train-cover\0" as *const u8 as *const core::ffi::c_char,
-                            ) != 0
+                            } else if longCommandWArg(&mut argument, c"--train-cover".as_ptr()) != 0
                             {
                                 operation = zom_train;
                                 if outFileName.is_null() {
@@ -2338,26 +1761,21 @@ unsafe fn main_0(
                                     ptr::write_bytes(
                                         &mut coverParams as *mut ZDICT_cover_params_t as *mut u8,
                                         0,
-                                        ::core::mem::size_of::<ZDICT_cover_params_t>(),
+                                        size_of::<ZDICT_cover_params_t>(),
                                     );
                                 } else {
                                     let fresh0 = argument;
                                     argument = argument.offset(1);
-                                    if *fresh0 as core::ffi::c_int != '=' as i32 {
-                                        badUsage(programName, originalArgument);
-                                        operationResult = 1;
-                                        break 'end;
-                                    } else if parseCoverParameters(argument, &mut coverParams) == 0
+                                    if *fresh0 as core::ffi::c_int != '=' as i32
+                                        || parseCoverParameters(argument, &mut coverParams) == 0
                                     {
                                         badUsage(programName, originalArgument);
                                         operationResult = 1;
                                         break 'end;
                                     }
                                 }
-                            } else if longCommandWArg(
-                                &mut argument,
-                                b"--train-fastcover\0" as *const u8 as *const core::ffi::c_char,
-                            ) != 0
+                            } else if longCommandWArg(&mut argument, c"--train-fastcover".as_ptr())
+                                != 0
                             {
                                 operation = zom_train;
                                 if outFileName.is_null() {
@@ -2369,29 +1787,22 @@ unsafe fn main_0(
                                         &mut fastCoverParams as *mut ZDICT_fastCover_params_t
                                             as *mut u8,
                                         0,
-                                        ::core::mem::size_of::<ZDICT_fastCover_params_t>(),
+                                        size_of::<ZDICT_fastCover_params_t>(),
                                     );
                                 } else {
                                     let fresh1 = argument;
                                     argument = argument.offset(1);
-                                    if *fresh1 as core::ffi::c_int != '=' as i32 {
-                                        badUsage(programName, originalArgument);
-                                        operationResult = 1;
-                                        break 'end;
-                                    } else if parseFastCoverParameters(
-                                        argument,
-                                        &mut fastCoverParams,
-                                    ) == 0
+                                    if *fresh1 as core::ffi::c_int != '=' as i32
+                                        || parseFastCoverParameters(argument, &mut fastCoverParams)
+                                            == 0
                                     {
                                         badUsage(programName, originalArgument);
                                         operationResult = 1;
                                         break 'end;
                                     }
                                 }
-                            } else if longCommandWArg(
-                                &mut argument,
-                                b"--train-legacy\0" as *const u8 as *const core::ffi::c_char,
-                            ) != 0
+                            } else if longCommandWArg(&mut argument, c"--train-legacy".as_ptr())
+                                != 0
                             {
                                 operation = zom_train;
                                 if outFileName.is_null() {
@@ -2401,77 +1812,33 @@ unsafe fn main_0(
                                 if *argument as core::ffi::c_int != 0 {
                                     let fresh2 = argument;
                                     argument = argument.offset(1);
-                                    if *fresh2 as core::ffi::c_int != '=' as i32 {
-                                        badUsage(programName, originalArgument);
-                                        operationResult = 1;
-                                        break 'end;
-                                    } else if parseLegacyParameters(argument, &mut dictSelect) == 0
+                                    if *fresh2 as core::ffi::c_int != '=' as i32
+                                        || parseLegacyParameters(argument, &mut dictSelect) == 0
                                     {
                                         badUsage(programName, originalArgument);
                                         operationResult = 1;
                                         break 'end;
                                     }
                                 }
-                            } else if longCommandWArg(
-                                &mut argument,
-                                b"--threads\0" as *const u8 as *const core::ffi::c_char,
-                            ) != 0
-                            {
+                            } else if longCommandWArg(&mut argument, c"--threads".as_ptr()) != 0 {
                                 NEXT_UINT32!(nbWorkers);
                                 setThreads_non1 = (nbWorkers != 1) as core::ffi::c_int;
-                            } else if longCommandWArg(
-                                &mut argument,
-                                b"--memlimit\0" as *const u8 as *const core::ffi::c_char,
-                            ) != 0
+                            } else if longCommandWArg(&mut argument, c"--memlimit".as_ptr()) != 0
+                                || longCommandWArg(&mut argument, c"--memory".as_ptr()) != 0
+                                || longCommandWArg(&mut argument, c"--memlimit-decompress".as_ptr())
+                                    != 0
                             {
                                 NEXT_UINT32!(memLimit);
-                            } else if longCommandWArg(
-                                &mut argument,
-                                b"--memory\0" as *const u8 as *const core::ffi::c_char,
-                            ) != 0
-                            {
-                                NEXT_UINT32!(memLimit);
-                            } else if longCommandWArg(
-                                &mut argument,
-                                b"--memlimit-decompress\0" as *const u8 as *const core::ffi::c_char,
-                            ) != 0
-                            {
-                                NEXT_UINT32!(memLimit);
-                            } else if longCommandWArg(
-                                &mut argument,
-                                b"--block-size\0" as *const u8 as *const core::ffi::c_char,
-                            ) != 0
+                            } else if longCommandWArg(&mut argument, c"--block-size".as_ptr()) != 0
+                                || longCommandWArg(&mut argument, c"--split".as_ptr()) != 0
+                                || longCommandWArg(&mut argument, c"--jobsize".as_ptr()) != 0
                             {
                                 NEXT_TSIZE!(chunkSize);
-                            } else if longCommandWArg(
-                                &mut argument,
-                                b"--split\0" as *const u8 as *const core::ffi::c_char,
-                            ) != 0
-                            {
-                                NEXT_TSIZE!(chunkSize);
-                            } else if longCommandWArg(
-                                &mut argument,
-                                b"--jobsize\0" as *const u8 as *const core::ffi::c_char,
-                            ) != 0
-                            {
-                                NEXT_TSIZE!(chunkSize);
-                            } else if longCommandWArg(
-                                &mut argument,
-                                b"--maxdict\0" as *const u8 as *const core::ffi::c_char,
-                            ) != 0
-                            {
+                            } else if longCommandWArg(&mut argument, c"--maxdict".as_ptr()) != 0 {
                                 NEXT_UINT32!(maxDictSize);
-                            } else if longCommandWArg(
-                                &mut argument,
-                                b"--dictID\0" as *const u8 as *const core::ffi::c_char,
-                            ) != 0
-                            {
+                            } else if longCommandWArg(&mut argument, c"--dictID".as_ptr()) != 0 {
                                 NEXT_UINT32!(dictID);
-                            } else if longCommandWArg(
-                                &mut argument,
-                                b"--zstd=\0" as *const u8 as *const core::ffi::c_char,
-                            ) != 0
-                            {
+                            } else if longCommandWArg(&mut argument, c"--zstd=".as_ptr()) != 0 {
                                 if parseCompressionParameters(argument, &mut compressionParams) == 0
                                 {
                                     badUsage(programName, originalArgument);
@@ -2480,59 +1847,42 @@ unsafe fn main_0(
                                 } else {
                                     cType = FIO_zstdCompression;
                                 }
-                            } else if longCommandWArg(
-                                &mut argument,
-                                b"--stream-size\0" as *const u8 as *const core::ffi::c_char,
-                            ) != 0
+                            } else if longCommandWArg(&mut argument, c"--stream-size".as_ptr()) != 0
                             {
                                 NEXT_TSIZE!(streamSrcSize);
                             } else if longCommandWArg(
                                 &mut argument,
-                                b"--target-compressed-block-size\0" as *const u8
-                                    as *const core::ffi::c_char,
+                                c"--target-compressed-block-size".as_ptr(),
                             ) != 0
                             {
                                 NEXT_TSIZE!(targetCBlockSize);
-                            } else if longCommandWArg(
-                                &mut argument,
-                                b"--size-hint\0" as *const u8 as *const core::ffi::c_char,
-                            ) != 0
-                            {
+                            } else if longCommandWArg(&mut argument, c"--size-hint".as_ptr()) != 0 {
                                 NEXT_TSIZE!(srcSizeHint);
-                            } else if longCommandWArg(
-                                &mut argument,
-                                b"--output-dir-flat\0" as *const u8 as *const core::ffi::c_char,
-                            ) != 0
+                            } else if longCommandWArg(&mut argument, c"--output-dir-flat".as_ptr())
+                                != 0
                             {
                                 NEXT_FIELD!(outDirName);
                                 if strlen(outDirName) == 0 {
                                     if g_displayLevel >= 1 {
                                         fprintf(
                                         stderr,
-                                        b"error: output dir cannot be empty string (did you mean to pass '.' instead?)\n\0"
-                                            as *const u8 as *const core::ffi::c_char,
+                                        c"error: output dir cannot be empty string (did you mean to pass '.' instead?)\n".as_ptr(),
                                     );
                                     }
                                     operationResult = 1;
                                     break 'end;
                                 }
-                            } else if longCommandWArg(
-                                &mut argument,
-                                b"--auto-threads\0" as *const u8 as *const core::ffi::c_char,
-                            ) != 0
+                            } else if longCommandWArg(&mut argument, c"--auto-threads".as_ptr())
+                                != 0
                             {
                                 let threadDefault;
                                 NEXT_FIELD!(threadDefault);
-                                if strcmp(
-                                    threadDefault,
-                                    b"logical\0" as *const u8 as *const core::ffi::c_char,
-                                ) == 0
-                                {
+                                if strcmp(threadDefault, c"logical".as_ptr()) == 0 {
                                     defaultLogicalCores = 1;
                                 }
                             } else if longCommandWArg(
                                 &mut argument,
-                                b"--output-dir-mirror\0" as *const u8 as *const core::ffi::c_char,
+                                c"--output-dir-mirror".as_ptr(),
                             ) != 0
                             {
                                 NEXT_FIELD!(outMirroredDirName);
@@ -2540,46 +1890,26 @@ unsafe fn main_0(
                                     if g_displayLevel >= 1 {
                                         fprintf(
                                         stderr,
-                                        b"error: output dir cannot be empty string (did you mean to pass '.' instead?)\n\0"
-                                            as *const u8 as *const core::ffi::c_char,
+                                        c"error: output dir cannot be empty string (did you mean to pass '.' instead?)\n".as_ptr(),
                                     );
                                     }
                                     operationResult = 1;
                                     break 'end;
                                 }
-                            } else if longCommandWArg(
-                                &mut argument,
-                                b"--trace\0" as *const u8 as *const core::ffi::c_char,
-                            ) != 0
-                            {
+                            } else if longCommandWArg(&mut argument, c"--trace".as_ptr()) != 0 {
                                 let traceFile;
                                 NEXT_FIELD!(traceFile);
                                 TRACE_enable(traceFile);
-                            } else if longCommandWArg(
-                                &mut argument,
-                                b"--patch-from\0" as *const u8 as *const core::ffi::c_char,
-                            ) != 0
+                            } else if longCommandWArg(&mut argument, c"--patch-from".as_ptr()) != 0
                             {
                                 NEXT_FIELD!(patchFromDictFileName);
                                 ultra = 1;
-                            } else if longCommandWArg(
-                                &mut argument,
-                                b"--patch-apply\0" as *const u8 as *const core::ffi::c_char,
-                            ) != 0
+                            } else if longCommandWArg(&mut argument, c"--patch-apply".as_ptr()) != 0
                             {
                                 operation = zom_decompress;
                                 NEXT_FIELD!(patchFromDictFileName);
-                                memLimit = (1)
-                                    << (if ::core::mem::size_of::<size_t>() == 4 {
-                                        ZSTD_WINDOWLOG_MAX_32
-                                    } else {
-                                        ZSTD_WINDOWLOG_MAX_64
-                                    });
-                            } else if longCommandWArg(
-                                &mut argument,
-                                b"--long\0" as *const u8 as *const core::ffi::c_char,
-                            ) != 0
-                            {
+                                memLimit = 1 << ZSTD_WINDOWLOG_MAX;
+                            } else if longCommandWArg(&mut argument, c"--long".as_ptr()) != 0 {
                                 let mut ldmWindowLog = 0;
                                 ldmFlag = 1;
                                 ultra = 1;
@@ -2596,19 +1926,13 @@ unsafe fn main_0(
                                 if compressionParams.windowLog == 0 {
                                     compressionParams.windowLog = ldmWindowLog;
                                 }
-                            } else if longCommandWArg(
-                                &mut argument,
-                                b"--fast\0" as *const u8 as *const core::ffi::c_char,
-                            ) != 0
-                            {
+                            } else if longCommandWArg(&mut argument, c"--fast".as_ptr()) != 0 {
                                 if *argument as core::ffi::c_int == '=' as i32 {
                                     let maxFast = -ZSTD_minCLevel() as u32;
                                     let mut fastLevel: u32 = 0;
                                     argument = argument.offset(1);
                                     fastLevel = readU32FromChar(&mut argument);
-                                    if fastLevel > maxFast {
-                                        fastLevel = maxFast;
-                                    }
+                                    fastLevel = Ord::min(fastLevel, maxFast);
                                     if fastLevel != 0 {
                                         cLevel = -(fastLevel as core::ffi::c_int);
                                         dictCLevel = cLevel;
@@ -2624,11 +1948,7 @@ unsafe fn main_0(
                                 } else {
                                     cLevel = -(1);
                                 }
-                            } else if longCommandWArg(
-                                &mut argument,
-                                b"--filelist\0" as *const u8 as *const core::ffi::c_char,
-                            ) != 0
-                            {
+                            } else if longCommandWArg(&mut argument, c"--filelist".as_ptr()) != 0 {
                                 let mut listName = core::ptr::null::<core::ffi::c_char>();
                                 NEXT_FIELD!(listName);
                                 UTIL_refFilename(file_of_names, listName);
@@ -2803,11 +2123,11 @@ unsafe fn main_0(
         if g_displayLevel >= 3 {
             fprintf(
                 stderr,
-                b"*** %s (%i-bit) %s, by %s ***\n\0" as *const u8 as *const core::ffi::c_char,
-                b"Zstandard CLI\0" as *const u8 as *const core::ffi::c_char,
-                (::core::mem::size_of::<size_t>()).wrapping_mul(8) as core::ffi::c_int,
-                b"v1.5.8\0" as *const u8 as *const core::ffi::c_char,
-                b"Yann Collet\0" as *const u8 as *const core::ffi::c_char,
+                c"*** %s (%i-bit) %s, by %s ***\n".as_ptr(),
+                c"Zstandard CLI".as_ptr(),
+                size_t::BITS as core::ffi::c_int,
+                c"v1.5.8".as_ptr(),
+                c"Yann Collet".as_ptr(),
             );
         }
         if operation as core::ffi::c_uint == zom_decompress as core::ffi::c_int as core::ffi::c_uint
@@ -2816,8 +2136,7 @@ unsafe fn main_0(
         {
             fprintf(
                 stderr,
-                b"Warning : decompression does not support multi-threading\n\0" as *const u8
-                    as *const core::ffi::c_char,
+                c"Warning : decompression does not support multi-threading\n".as_ptr(),
             );
         }
         if nbWorkers == NBWORKERS_AUTOCPU as core::ffi::c_uint && singleThread == 0 {
@@ -2826,8 +2145,7 @@ unsafe fn main_0(
                 if g_displayLevel >= 3 {
                     fprintf(
                         stderr,
-                        b"Note: %d logical core(s) detected \n\0" as *const u8
-                            as *const core::ffi::c_char,
+                        c"Note: %d logical core(s) detected \n".as_ptr(),
                         nbWorkers,
                     );
                 }
@@ -2836,8 +2154,7 @@ unsafe fn main_0(
                 if g_displayLevel >= 3 {
                     fprintf(
                         stderr,
-                        b"Note: %d physical core(s) detected \n\0" as *const u8
-                            as *const core::ffi::c_char,
+                        c"Note: %d physical core(s) detected \n".as_ptr(),
                         nbWorkers,
                     );
                 }
@@ -2848,7 +2165,7 @@ unsafe fn main_0(
         {
             fprintf(
                 stderr,
-                b"Compressing with %u worker threads \n\0" as *const u8 as *const core::ffi::c_char,
+                c"Compressing with %u worker threads \n".as_ptr(),
                 nbWorkers,
             );
         }
@@ -2866,8 +2183,7 @@ unsafe fn main_0(
                     if g_displayLevel >= 2 {
                         fprintf(
                             stderr,
-                            b"Warning : %s is a symbolic link, ignoring \n\0" as *const u8
-                                as *const core::ffi::c_char,
+                            c"Warning : %s is a symbolic link, ignoring \n".as_ptr(),
                             *((*filenames).fileNames).offset(u as isize),
                         );
                     }
@@ -2900,7 +2216,7 @@ unsafe fn main_0(
                     if g_displayLevel >= 1 {
                         fprintf(
                             stderr,
-                            b"zstd: error reading %s \n\0" as *const u8 as *const core::ffi::c_char,
+                            c"zstd: error reading %s \n".as_ptr(),
                             *((*file_of_names).fileNames).add(flNb),
                         );
                     }
@@ -2932,8 +2248,7 @@ unsafe fn main_0(
                 if g_displayLevel >= 1 {
                     fprintf(
                         stderr,
-                        b"benchmark mode is only compatible with zstd format \n\0" as *const u8
-                            as *const core::ffi::c_char,
+                        c"benchmark mode is only compatible with zstd format \n".as_ptr(),
                     );
                 }
                 operationResult = 1;
@@ -2960,50 +2275,28 @@ unsafe fn main_0(
                     cLevelLast = 0;
                     cLevel = cLevelLast;
                 }
-                if cLevel > ZSTD_maxCLevel() {
-                    cLevel = ZSTD_maxCLevel();
-                }
-                if cLevelLast > ZSTD_maxCLevel() {
-                    cLevelLast = ZSTD_maxCLevel();
-                }
-                if cLevelLast < cLevel {
-                    cLevelLast = cLevel;
-                }
+                cLevel = Ord::min(cLevel, ZSTD_maxCLevel());
+                cLevelLast = Ord::min(cLevelLast, ZSTD_maxCLevel());
+                cLevelLast = Ord::max(cLevelLast, cLevel);
                 if g_displayLevel >= 3 {
-                    fprintf(
-                        stderr,
-                        b"Benchmarking \0" as *const u8 as *const core::ffi::c_char,
-                    );
+                    fprintf(stderr, c"Benchmarking ".as_ptr());
                 }
                 if (*filenames).tableSize > 1 && g_displayLevel >= 3 {
                     fprintf(
                         stderr,
-                        b"%u files \0" as *const u8 as *const core::ffi::c_char,
+                        c"%u files ".as_ptr(),
                         (*filenames).tableSize as core::ffi::c_uint,
                     );
                 }
                 if cLevelLast > cLevel {
                     if g_displayLevel >= 3 {
-                        fprintf(
-                            stderr,
-                            b"from level %d to %d \0" as *const u8 as *const core::ffi::c_char,
-                            cLevel,
-                            cLevelLast,
-                        );
+                        fprintf(stderr, c"from level %d to %d ".as_ptr(), cLevel, cLevelLast);
                     }
                 } else if g_displayLevel >= 3 {
-                    fprintf(
-                        stderr,
-                        b"at level %d \0" as *const u8 as *const core::ffi::c_char,
-                        cLevel,
-                    );
+                    fprintf(stderr, c"at level %d ".as_ptr(), cLevel);
                 }
                 if g_displayLevel >= 3 {
-                    fprintf(
-                        stderr,
-                        b"using %i threads \n\0" as *const u8 as *const core::ffi::c_char,
-                        nbWorkers,
-                    );
+                    fprintf(stderr, c"using %i threads \n".as_ptr(), nbWorkers);
                 }
                 if (*filenames).tableSize > 0 {
                     if separateFiles != 0 {
@@ -3051,7 +2344,7 @@ unsafe fn main_0(
             let zParams = ZDICT_params_t {
                 compressionLevel: dictCLevel,
                 notificationLevel: g_displayLevel as core::ffi::c_uint,
-                dictID: dictID,
+                dictID,
             };
             if dict as core::ffi::c_uint == cover as core::ffi::c_int as core::ffi::c_uint {
                 let optimize = (coverParams.k == 0 || coverParams.d == 0) as core::ffi::c_int;
@@ -3089,9 +2382,10 @@ unsafe fn main_0(
                     memLimit,
                 );
             } else {
-                let mut dictParams = ZDICT_legacy_params_t::default();
-                dictParams.selectivityLevel = dictSelect;
-                dictParams.zParams = zParams;
+                let mut dictParams = ZDICT_legacy_params_t {
+                    selectivityLevel: dictSelect,
+                    zParams,
+                };
                 operationResult = DiB_trainFromFiles(
                     outFileName,
                     maxDictSize as size_t,
@@ -3116,8 +2410,7 @@ unsafe fn main_0(
                     if g_displayLevel >= 1 {
                         fprintf(
                         stderr,
-                        b"please provide correct input file(s) or non-empty directories -- ignored \n\0"
-                            as *const u8 as *const core::ffi::c_char,
+                        c"please provide correct input file(s) or non-empty directories -- ignored \n".as_ptr(),
                     );
                     }
                     operationResult = 0;
@@ -3137,11 +2430,7 @@ unsafe fn main_0(
                 && UTIL_isConsole(stdin) != 0
             {
                 if g_displayLevel >= 1 {
-                    fprintf(
-                        stderr,
-                        b"stdin is a console, aborting\n\0" as *const u8
-                            as *const core::ffi::c_char,
-                    );
+                    fprintf(stderr, c"stdin is a console, aborting\n".as_ptr());
                 }
                 operationResult = 1;
             } else if (outFileName.is_null() || strcmp(outFileName, stdoutmark.as_ptr()) == 0)
@@ -3152,11 +2441,7 @@ unsafe fn main_0(
                     != zom_decompress as core::ffi::c_int as core::ffi::c_uint
             {
                 if g_displayLevel >= 1 {
-                    fprintf(
-                        stderr,
-                        b"stdout is a console, aborting\n\0" as *const u8
-                            as *const core::ffi::c_char,
-                    );
+                    fprintf(stderr, c"stdout is a console, aborting\n".as_ptr());
                 }
                 operationResult = 1;
             } else {
@@ -3169,36 +2454,32 @@ unsafe fn main_0(
                     if g_displayLevel >= 2 {
                         fprintf(
                             stderr,
-                            b"Warning : compression level higher than max, reduced to %i \n\0"
-                                as *const u8
-                                as *const core::ffi::c_char,
+                            c"Warning : compression level higher than max, reduced to %i \n"
+                                .as_ptr(),
                             maxCLevel,
                         );
                     }
                     cLevel = maxCLevel;
                 }
-                if showDefaultCParams != 0 {
-                    if operation as core::ffi::c_uint
+                if showDefaultCParams != 0
+                    && operation as core::ffi::c_uint
                         == zom_decompress as core::ffi::c_int as core::ffi::c_uint
-                    {
-                        if g_displayLevel >= 1 {
-                            fprintf(
+                {
+                    if g_displayLevel >= 1 {
+                        fprintf(
                             stderr,
-                            b"error : can't use --show-default-cparams in decompression mode \n\0"
-                                as *const u8 as *const core::ffi::c_char,
+                            c"error : can't use --show-default-cparams in decompression mode \n"
+                                .as_ptr(),
                         );
-                        }
-                        operationResult = 1;
-                        break 'end;
                     }
+                    operationResult = 1;
+                    break 'end;
                 }
                 if !dictFileName.is_null() && !patchFromDictFileName.is_null() {
                     if g_displayLevel >= 1 {
                         fprintf(
                             stderr,
-                            b"error : can't use -D and --patch-from=# at the same time \n\0"
-                                as *const u8
-                                as *const core::ffi::c_char,
+                            c"error : can't use -D and --patch-from=# at the same time \n".as_ptr(),
                         );
                     }
                     operationResult = 1;
@@ -3206,8 +2487,7 @@ unsafe fn main_0(
                     if g_displayLevel >= 1 {
                         fprintf(
                             stderr,
-                            b"error : can't use --patch-from=# on multiple files \n\0" as *const u8
-                                as *const core::ffi::c_char,
+                            c"error : can't use --patch-from=# on multiple files \n".as_ptr(),
                         );
                     }
                     operationResult = 1;
@@ -3229,9 +2509,8 @@ unsafe fn main_0(
                         if g_displayLevel >= 3 {
                             fprintf(
                                 stderr,
-                                b"Note: src files are not removed when output is stdout \n\0"
-                                    as *const u8
-                                    as *const core::ffi::c_char,
+                                c"Note: src files are not removed when output is stdout \n"
+                                    .as_ptr(),
                             );
                         }
                         removeSrcFile = 0;
@@ -3287,16 +2566,13 @@ unsafe fn main_0(
                         FIO_setSrcSizeHint(prefs, srcSizeHint);
                         FIO_setLiteralCompressionMode(prefs, literalCompressionMode);
                         FIO_setSparseWrite(prefs, 0);
-                        if adaptMin > cLevel {
-                            cLevel = adaptMin;
-                        }
-                        if adaptMax < cLevel {
-                            cLevel = adaptMax;
-                        }
+                        cLevel = Ord::max(cLevel, adaptMin);
+                        cLevel = Ord::min(cLevel, adaptMax);
                         let strategyBounds =
                             ZSTD_cParam_getBounds(ZSTD_cParameter::ZSTD_c_strategy);
-                        assert!(
-                            ZSTD_NB_STRATEGIES as core::ffi::c_int == strategyBounds.upperBound
+                        assert_eq!(
+                            ZSTD_NB_STRATEGIES as core::ffi::c_int,
+                            strategyBounds.upperBound
                         );
                         if showDefaultCParams != 0 || g_displayLevel >= 4 {
                             let mut fileNb: size_t = 0;

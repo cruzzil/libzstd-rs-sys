@@ -4,17 +4,17 @@ use std::time::{Duration, Instant};
 use libc::size_t;
 
 use crate::lib::common::error_private::{ERR_isError, Error};
+use crate::lib::common::mem::MEM_64bits;
 use crate::lib::common::pool::{POOL_add, POOL_create, POOL_free};
-use crate::lib::compress::zstd_compress_internal::{ZSTD_hash6Ptr_array, ZSTD_hash8Ptr_array};
+use crate::lib::compress::zstd_compress_internal::ZSTD_hash64Ptr_array;
 use crate::lib::dictBuilder::cover::{
     COVER_best_finish, COVER_best_start, COVER_best_t, COVER_best_wait, COVER_computeEpochs,
-    COVER_dictSelectionError, COVER_dictSelectionFree, COVER_dictSelectionIsError, COVER_segment_t,
-    COVER_selectDict, COVER_warnOnSmallCorpus,
+    COVER_dictSelectionError, COVER_segment_t, COVER_selectDict, COVER_warnOnSmallCorpus,
 };
+use crate::lib::dictBuilder::zdict::finalize_dictionary;
 use crate::lib::zdict::experimental::{
     ZDICT_cover_params_t, ZDICT_fastCover_params_t, ZDICT_DICTSIZE_MIN,
 };
-use crate::lib::zdict::ZDICT_finalizeDictionary;
 use crate::ZDICT_params_t;
 
 #[derive(Debug, Copy, Clone, Default)]
@@ -49,6 +49,12 @@ struct FASTCOVER_tryParameters_data_t<'a, 'b> {
     parameters: ZDICT_cover_params_t,
 }
 
+/// There are 32-bit indexes used to ref samples, so limit samples size to 4GB
+/// on 64-bit builds.
+/// For 32-bit builds we choose 1 GB: most 32-bit platforms have 2GB user-mode
+/// addressable space and we allocate a large contiguous buffer, so 1GB is
+/// already a high limit.
+const FASTCOVER_MAX_SAMPLES_SIZE: usize = if MEM_64bits() { u32::MAX as _ } else { 1 << 30 };
 const FASTCOVER_MAX_F: core::ffi::c_int = 31;
 const FASTCOVER_MAX_ACCEL: core::ffi::c_int = 10;
 const FASTCOVER_DEFAULT_SPLITPOINT: core::ffi::c_double = 0.75f64;
@@ -57,8 +63,8 @@ const DEFAULT_ACCEL: core::ffi::c_int = 1;
 
 fn FASTCOVER_hashPtrToIndex(p: &[u8; 8], f: u32, d: core::ffi::c_uint) -> size_t {
     match d {
-        6 => ZSTD_hash6Ptr_array(p, f),
-        _ => ZSTD_hash8Ptr_array(p, f),
+        6 => ZSTD_hash64Ptr_array::<6>(p, f),
+        _ => ZSTD_hash64Ptr_array::<8>(p, f),
     }
 }
 
@@ -95,33 +101,19 @@ fn FASTCOVER_selectSegment(
     let samples = ctx.samples;
     let f = ctx.f;
     let dmersInK = k.wrapping_sub(d).wrapping_add(1);
-    let mut bestSegment = {
-        COVER_segment_t {
-            begin: 0,
-            end: 0,
-            score: 0,
-        }
-    };
+    let mut bestSegment = COVER_segment_t::default();
     let mut activeSegment = COVER_segment_t {
-        begin: 0,
-        end: 0,
+        begin,
+        end: begin,
         score: 0,
     };
-    activeSegment.begin = begin;
-    activeSegment.end = begin;
-    activeSegment.score = 0;
-    while activeSegment.end < end {
-        let idx = FASTCOVER_hashPtrToIndex(
-            ctx.samples[activeSegment.end as usize..][..8]
-                .try_into()
-                .unwrap(),
-            f,
-            d,
-        );
+    for pos in begin..end {
+        let idx =
+            FASTCOVER_hashPtrToIndex(ctx.samples[pos as usize..][..8].try_into().unwrap(), f, d);
         if segmentFreqs[idx] == 0 {
             activeSegment.score = (activeSegment.score).wrapping_add(freqs[idx]);
         }
-        activeSegment.end = (activeSegment.end).wrapping_add(1);
+        activeSegment.end = pos.wrapping_add(1);
         segmentFreqs[idx] += 1;
         if (activeSegment.end).wrapping_sub(activeSegment.begin) == dmersInK.wrapping_add(1) {
             let delIndex = FASTCOVER_hashPtrToIndex(
@@ -141,23 +133,14 @@ fn FASTCOVER_selectSegment(
             bestSegment = activeSegment;
         }
     }
-    while activeSegment.begin < end {
-        let delIndex_0 = FASTCOVER_hashPtrToIndex(
-            samples[activeSegment.begin as usize..][..8]
-                .try_into()
-                .unwrap(),
-            f,
-            d,
-        );
-        segmentFreqs[delIndex_0] -= 1;
-        activeSegment.begin += 1;
+    for pos in activeSegment.begin..end {
+        let delIndex =
+            FASTCOVER_hashPtrToIndex(samples[pos as usize..][..8].try_into().unwrap(), f, d);
+        segmentFreqs[delIndex] -= 1;
     }
-    let mut pos: u32 = 0;
-    pos = bestSegment.begin;
-    while pos != bestSegment.end {
+    for pos in bestSegment.begin..bestSegment.end {
         let i = FASTCOVER_hashPtrToIndex(samples[pos as usize..][..8].try_into().unwrap(), f, d);
         freqs[i] = 0;
-        pos = pos.wrapping_add(1);
     }
     bestSegment
 }
@@ -203,9 +186,7 @@ fn FASTCOVER_computeFrequency(ctx: &mut FASTCOVER_ctx_t) {
     let d = ctx.d;
     let skip = ctx.accelParams.skip;
     let readLength = if d > 8 { d } else { 8 };
-    let mut i: size_t = 0;
-    i = 0;
-    while i < ctx.nbTrainSamples {
+    for i in 0..ctx.nbTrainSamples {
         let mut start = ctx.offsets[i];
         let currSampleEnd = ctx.offsets[i + 1];
         while start.wrapping_add(readLength as size_t) <= currSampleEnd {
@@ -214,7 +195,6 @@ fn FASTCOVER_computeFrequency(ctx: &mut FASTCOVER_ctx_t) {
             ctx.freqs[dmerIndex] += 1;
             start = start.wrapping_add(skip as size_t).wrapping_add(1);
         }
-        i = i.wrapping_add(1);
     }
 }
 
@@ -227,7 +207,7 @@ fn FASTCOVER_ctx_init<'a>(
     f: core::ffi::c_uint,
     accelParams: FASTCOVER_accel_t,
     displayLevel: core::ffi::c_int,
-) -> size_t {
+) -> Result<(), Error> {
     let nbSamples = samplesSizes.len() as core::ffi::c_uint;
     let totalSamplesSize = samplesSizes.iter().sum::<usize>();
     let nbTrainSamples = if splitPoint < 1.0f64 {
@@ -253,14 +233,8 @@ fn FASTCOVER_ctx_init<'a>(
         totalSamplesSize
     };
 
-    const GB: usize = (1) << 30;
-    const FASTCOVER_MAX_SAMPLES_SIZE: usize = match usize::BITS {
-        64 => 4 * GB,
-        _ => GB,
-    };
-
     ctx.displayLevel = displayLevel;
-    if totalSamplesSize < Ord::max(d as size_t, ::core::mem::size_of::<u64>())
+    if totalSamplesSize < Ord::max(d as size_t, size_of::<u64>())
         || totalSamplesSize >= FASTCOVER_MAX_SAMPLES_SIZE
     {
         if displayLevel >= 1 {
@@ -270,7 +244,7 @@ fn FASTCOVER_ctx_init<'a>(
                 FASTCOVER_MAX_SAMPLES_SIZE >> 20,
             );
         }
-        return Error::srcSize_wrong.to_error_code();
+        return Err(Error::srcSize_wrong);
     }
     if nbTrainSamples < 5 {
         if displayLevel >= 1 {
@@ -279,7 +253,7 @@ fn FASTCOVER_ctx_init<'a>(
                 nbTrainSamples,
             );
         }
-        return Error::srcSize_wrong.to_error_code();
+        return Err(Error::srcSize_wrong);
     }
     if nbTestSamples < 1 {
         if displayLevel >= 1 {
@@ -288,7 +262,7 @@ fn FASTCOVER_ctx_init<'a>(
                 nbTestSamples,
             );
         }
-        return Error::srcSize_wrong.to_error_code();
+        return Err(Error::srcSize_wrong);
     }
     if displayLevel >= 2 {
         eprintln!(
@@ -307,8 +281,7 @@ fn FASTCOVER_ctx_init<'a>(
     ctx.nbSamples = nbSamples as size_t;
     ctx.nbTrainSamples = nbTrainSamples as size_t;
     ctx.nbTestSamples = nbTestSamples as size_t;
-    ctx.nbDmers =
-        trainingSamplesSize.wrapping_sub(Ord::max(d as size_t, ::core::mem::size_of::<u64>())) + 1;
+    ctx.nbDmers = trainingSamplesSize.wrapping_sub(Ord::max(d as size_t, size_of::<u64>())) + 1;
     ctx.d = d;
     ctx.f = f;
     ctx.accelParams = accelParams;
@@ -323,7 +296,7 @@ fn FASTCOVER_ctx_init<'a>(
         eprintln!("Computing frequencies");
     }
     FASTCOVER_computeFrequency(ctx);
-    0
+    Ok(())
 }
 
 fn FASTCOVER_buildDictionary<'a>(
@@ -339,18 +312,16 @@ fn FASTCOVER_buildDictionary<'a>(
     let displayLevel = ctx.displayLevel;
     let mut zeroScoreRun = 0 as size_t;
     let mut last_update_time = Instant::now();
-    let mut epoch: size_t = 0;
     if displayLevel >= 2 {
         eprintln!(
             "Breaking content into {} epochs of size {}",
             epochs.num, epochs.size,
         );
     }
-    epoch = 0;
+    let mut epoch: size_t = 0;
     while tail > 0 {
         let epochBegin = (epoch * epochs.size as size_t) as u32;
         let epochEnd = epochBegin.wrapping_add(epochs.size);
-        let mut segmentSize: size_t = 0;
         let segment =
             FASTCOVER_selectSegment(ctx, freqs, epochBegin, epochEnd, parameters, segmentFreqs);
         if segment.score == 0 {
@@ -361,7 +332,7 @@ fn FASTCOVER_buildDictionary<'a>(
         } else {
             zeroScoreRun = 0;
             /* Trim the segment if necessary and if it is too small then we are done */
-            segmentSize = Ord::min(
+            let segmentSize = Ord::min(
                 (segment.end - segment.begin + parameters.d - 1) as usize,
                 tail,
             );
@@ -393,18 +364,20 @@ fn FASTCOVER_buildDictionary<'a>(
     unsafe { super::cover::assume_init_ref(&dict[tail..]) }
 }
 
-unsafe fn FASTCOVER_tryParameters_wrapper(opaque: *mut core::ffi::c_void) {
+fn FASTCOVER_tryParameters_wrapper(opaque: *mut core::ffi::c_void) {
     FASTCOVER_tryParameters(unsafe { Box::from_raw(opaque.cast()) })
 }
 
+#[expect(
+    clippy::boxed_local,
+    reason = "Box is needed because the main thread may destroy `data.ctx` immediately after the completion signal from `COVER_best_finish`"
+)]
 fn FASTCOVER_tryParameters(data: Box<FASTCOVER_tryParameters_data_t>) {
     let ctx = data.ctx;
     let parameters = data.parameters;
     let dictBufferCapacity = data.dictBufferCapacity;
-    let totalCompressedSize = Error::GENERIC.to_error_code();
     let mut segmentFreqs: Box<[u16]> = Box::from(vec![0u16; 1 << ctx.f]);
     let mut dict: Box<[MaybeUninit<u8>]> = Box::new_uninit_slice(dictBufferCapacity);
-    let mut selection = COVER_dictSelectionError(Error::GENERIC.to_error_code());
 
     let displayLevel = ctx.displayLevel;
     let mut freqs = ctx.freqs.clone();
@@ -413,10 +386,9 @@ fn FASTCOVER_tryParameters(data: Box<FASTCOVER_tryParameters_data_t>) {
         FASTCOVER_buildDictionary(ctx, &mut freqs, &mut dict, parameters, &mut segmentFreqs);
     let nbFinalizeSamples =
         (ctx.nbTrainSamples * ctx.accelParams.finalize as size_t / 100) as core::ffi::c_uint;
-    selection = COVER_selectDict(
+    let selection = COVER_selectDict(
         dict_tail,
         dictBufferCapacity,
-        dict_tail.len(),
         ctx.samples,
         ctx.samplesSizes,
         nbFinalizeSamples,
@@ -424,18 +396,14 @@ fn FASTCOVER_tryParameters(data: Box<FASTCOVER_tryParameters_data_t>) {
         ctx.nbSamples,
         parameters,
         &ctx.offsets,
-        totalCompressedSize,
     );
-    if COVER_dictSelectionIsError(&selection) && displayLevel >= 1 {
+    if selection.is_err() && displayLevel >= 1 {
         eprintln!("Failed to select dictionary");
     }
 
     drop(dict);
+    let selection = selection.unwrap_or_else(COVER_dictSelectionError);
     COVER_best_finish(data.best, parameters, &selection);
-    drop(data);
-    drop(segmentFreqs);
-    COVER_dictSelectionFree(selection);
-    drop(freqs);
 }
 
 fn FASTCOVER_convertToCoverParams(
@@ -578,7 +546,7 @@ fn train_from_buffer_fastcover(
     }
     let accelParams = FASTCOVER_defaultAccelParameters[parameters.accel as usize];
 
-    let initVal = FASTCOVER_ctx_init(
+    if let Err(err) = FASTCOVER_ctx_init(
         &mut ctx,
         samples,
         samplesSizes,
@@ -587,12 +555,11 @@ fn train_from_buffer_fastcover(
         parameters.f,
         accelParams,
         displayLevel,
-    );
-    if ERR_isError(initVal) {
+    ) {
         if displayLevel >= 1 {
             eprintln!("Failed to initialize context");
         }
-        return initVal;
+        return err.to_error_code();
     }
     COVER_warnOnSmallCorpus(dictBufferCapacity, ctx.nbDmers, displayLevel);
     if displayLevel >= 2 {
@@ -607,21 +574,23 @@ fn train_from_buffer_fastcover(
 
     let nbFinalizeSamples =
         (ctx.nbTrainSamples * ctx.accelParams.finalize as size_t / 100) as core::ffi::c_uint;
+    let samplesSizes = &samplesSizes[..nbFinalizeSamples as usize];
+    let samples = &samples[..samplesSizes.iter().sum()];
     let customDictContentSize = dict_tail.len();
     let dictBuffer = dict.as_mut_ptr() as *mut core::ffi::c_void;
     let customDictContent = dictBuffer.wrapping_add(dictBufferCapacity - customDictContentSize);
     let dictionarySize = unsafe {
-        ZDICT_finalizeDictionary(
+        finalize_dictionary(
             dictBuffer,
             dictBufferCapacity,
             customDictContent,
             customDictContentSize,
-            samples.as_ptr() as *const core::ffi::c_void,
-            samplesSizes.as_ptr(),
-            nbFinalizeSamples,
+            samples,
+            samplesSizes,
             coverParams.zParams,
         )
-    };
+    }
+    .unwrap_or_else(|err| err.to_error_code());
     if !ERR_isError(dictionarySize) && displayLevel >= 2 {
         eprintln!("Constructed dictionary of size {}", dictionarySize);
     }
@@ -807,7 +776,7 @@ fn optimize_train_from_buffer_fastcover(
             displayLevel - 1
         };
 
-        let initVal = FASTCOVER_ctx_init(
+        if let Err(err) = FASTCOVER_ctx_init(
             &mut ctx,
             samples,
             samplesSizes,
@@ -816,14 +785,13 @@ fn optimize_train_from_buffer_fastcover(
             f,
             accelParams,
             childDisplayLevel,
-        );
-        if ERR_isError(initVal) {
+        ) {
             if displayLevel >= 1 {
                 eprintln!("Failed to initialize context");
             }
             drop(COVER_best_wait(&best));
             unsafe { POOL_free(pool) };
-            return initVal;
+            return err.to_error_code();
         }
         if warned == 0 {
             COVER_warnOnSmallCorpus(dictBufferCapacity, ctx.nbDmers, displayLevel);
@@ -869,7 +837,7 @@ fn optimize_train_from_buffer_fastcover(
                         POOL_add(
                             pool,
                             FASTCOVER_tryParameters_wrapper,
-                            Box::leak(data) as *mut _ as *mut core::ffi::c_void,
+                            Box::into_raw(data).cast(),
                         )
                     }
                 } else {

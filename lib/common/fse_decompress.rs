@@ -1,19 +1,14 @@
 use libc::size_t;
 
 use crate::lib::common::fse::{
-    FSE_DTableHeader, FSE_decode_t, FSE_MAX_SYMBOL_VALUE, FSE_MAX_TABLELOG,
+    FSE_DTableHeader, FSE_decode_t, FSE_BUILD_DTABLE_WKSP_SIZE, FSE_DECOMPRESS_WKSP_SIZE,
+    FSE_MAX_SYMBOL_VALUE, FSE_MAX_TABLELOG, FSE_TABLESTEP,
 };
 use crate::lib::common::{
     bitstream::{BIT_DStream_t, StreamStatus},
     entropy_common::{DTable, FSE_readNCount_bmi2, Workspace},
     error_private::Error,
 };
-
-#[derive(Copy, Clone, Debug, PartialEq)]
-#[repr(C, align(4))]
-pub(crate) struct FSE_DTable {
-    pub header: FSE_DTableHeader,
-}
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[repr(C)]
@@ -75,26 +70,16 @@ impl<'a> FSE_DState_t<'a> {
 fn FSE_buildDTable_internal(
     dt: &mut DTable,
     normalizedCounter: &[core::ffi::c_short; 256],
-    maxSymbolValue: core::ffi::c_uint,
+    maxSymbolValue: u8,
     tableLog: core::ffi::c_uint,
 ) -> Result<(), Error> {
     let wkspSize = dt.elements[(1 << tableLog)..].len() * 4;
     let (header, elements, symbols, spread) = dt.destructure_mut(maxSymbolValue, tableLog);
-    let maxSV1 = maxSymbolValue.wrapping_add(1);
-    let tableSize = ((1) << tableLog) as u32;
+    let maxSV1 = usize::from(maxSymbolValue) + 1;
+    let tableSize = 1usize << tableLog;
     let mut highThreshold = tableSize.wrapping_sub(1);
 
-    if ((::core::mem::size_of::<core::ffi::c_short>() as core::ffi::c_ulong)
-        .wrapping_mul(maxSymbolValue.wrapping_add(1) as core::ffi::c_ulong)
-        as core::ffi::c_ulonglong)
-        .wrapping_add((1) << tableLog)
-        .wrapping_add(8)
-        > wkspSize as core::ffi::c_ulonglong
-    {
-        return Err(Error::maxSymbolValue_tooLarge);
-    }
-
-    if maxSymbolValue > FSE_MAX_SYMBOL_VALUE as core::ffi::c_uint {
+    if FSE_BUILD_DTABLE_WKSP_SIZE(tableLog as usize, maxSymbolValue as usize) > wkspSize {
         return Err(Error::maxSymbolValue_tooLarge);
     }
 
@@ -107,112 +92,109 @@ fn FSE_buildDTable_internal(
         fastMode: 1,
     };
 
-    let largeLimit = ((1) << tableLog.wrapping_sub(1)) as i16;
-    let mut s: u32 = 0;
-    s = 0;
-    while s < maxSV1 {
-        if normalizedCounter[s as usize] as core::ffi::c_int == -(1) {
-            let fresh0 = highThreshold;
+    // Init: lay down lowprob symbols
+    let largeLimit = (1 << tableLog.wrapping_sub(1)) as i16;
+    for s in 0..maxSV1 {
+        if normalizedCounter[s] == -1 {
+            elements[highThreshold].symbol = s as u8;
             highThreshold = highThreshold.wrapping_sub(1);
-            elements[fresh0 as usize].symbol = s as u8;
-            symbols[s as usize] = 1;
+            symbols[s] = 1;
         } else {
-            if normalizedCounter[s as usize] as core::ffi::c_int >= largeLimit as core::ffi::c_int {
+            if normalizedCounter[s] >= largeLimit {
                 DTableH.fastMode = 0;
             }
-            symbols[s as usize] = normalizedCounter[s as usize] as u16;
+            symbols[s] = normalizedCounter[s] as u16;
         }
-        s = s.wrapping_add(1);
     }
 
     *header = DTableH;
 
+    // Spread symbols
     if highThreshold == tableSize.wrapping_sub(1) {
-        let tableMask = tableSize.wrapping_sub(1) as size_t;
-        let step = (tableSize >> 1)
-            .wrapping_add(tableSize >> 3)
-            .wrapping_add(3) as size_t;
-        let add = 0x101010101010101u64;
-        let mut pos = 0 as size_t;
-        let mut sv = 0u64;
+        let tableMask = tableSize.wrapping_sub(1);
+        let step = FSE_TABLESTEP(tableSize);
 
-        for s_0 in 0..maxSV1 {
-            let mut i: core::ffi::c_int = 0;
-            let n = normalizedCounter[s_0 as usize] as core::ffi::c_int;
-            spread[pos as usize..][..8].copy_from_slice(&sv.to_le_bytes());
-            i = 8;
-            while i < n {
-                spread[pos as usize..][i as usize..][..8].copy_from_slice(&sv.to_le_bytes());
-                i += 8;
+        // First lay down the symbols in order.
+        // We use a u64 to lay down 8 bytes at a time. This reduces branch
+        // misses since small blocks generally have small table logs, so nearly
+        // all symbols have counts <= 8. We ensure we have 8 bytes at the end of
+        // our buffer to handle the over-write.
+        let add = 0x101010101010101u64;
+        let mut pos = 0usize;
+        let mut sv = 0u64;
+        for &v in &normalizedCounter[..maxSV1] {
+            let n = v as usize;
+            let data = &mut spread[pos..][..n.max(1).next_multiple_of(8)];
+            for chunk in data.as_chunks_mut::<8>().0 {
+                *chunk = sv.to_le_bytes();
             }
-            pos = pos.wrapping_add(n as size_t);
+            pos = pos.wrapping_add(n);
             sv = sv.wrapping_add(add);
         }
 
-        let mut position = 0 as size_t;
-        let mut s_1: size_t = 0;
+        // Now we spread those positions across the table.
+        // The benefit of doing it in two stages is that we avoid the
+        // variable size inner loop, which caused lots of branch misses.
+        // Now we can run through all the positions without any branch misses.
+        // We unroll the loop twice, since that is what empirically worked best.
+        let mut position = 0usize;
         let unroll = 2;
-        s_1 = 0;
-        while s_1 < tableSize as size_t {
-            let mut u: size_t = 0;
-            u = 0;
-            while u < unroll {
+        for s in (0..tableSize).step_by(unroll) {
+            for u in 0..unroll {
                 let uPosition = position.wrapping_add(u * step) & tableMask;
-                elements[uPosition as usize].symbol = spread[(s_1 + u) as usize];
-                u = u.wrapping_add(1);
+                elements[uPosition].symbol = spread[s + u];
             }
             position = position.wrapping_add(unroll * step) & tableMask;
-            s_1 = s_1.wrapping_add(unroll);
         }
     } else {
-        let tableMask_0 = tableSize.wrapping_sub(1);
-        let step_0 = (tableSize >> 1)
+        let tableMask = tableSize.wrapping_sub(1);
+        let step = (tableSize >> 1)
             .wrapping_add(tableSize >> 3)
             .wrapping_add(3);
 
-        let mut position_0 = 0u32;
-        for s_2 in 0..maxSV1 {
-            for _ in 0..normalizedCounter[s_2 as usize] {
-                elements[position_0 as usize].symbol = s_2 as u8;
-                position_0 = position_0.wrapping_add(step_0) & tableMask_0;
-                while position_0 > highThreshold {
-                    position_0 = position_0.wrapping_add(step_0) & tableMask_0;
+        let mut position = 0usize;
+        for (s, &v) in normalizedCounter[..maxSV1].iter().enumerate() {
+            for _ in 0..v {
+                elements[position].symbol = s as u8;
+                position = position.wrapping_add(step) & tableMask;
+                while position > highThreshold {
+                    position = position.wrapping_add(step) & tableMask;
                 }
             }
         }
 
-        if position_0 != 0 {
-            return Err(Error::GENERIC);
+        if position != 0 {
+            return Err(Error::GENERIC); // position must reach all cells once, otherwise normalizedCounter is incorrect
         }
     }
 
-    for u in 0..tableSize {
-        let symbol = usize::from((elements[u as usize]).symbol);
+    // Build decoding table
+    for elt in &mut elements[..tableSize] {
+        let symbol = usize::from(elt.symbol);
         let nextState = u32::from(symbols[symbol]);
         symbols[symbol] += 1;
-        (elements[u as usize]).nbBits = tableLog.wrapping_sub(nextState.ilog2()) as u8;
-        (elements[u as usize]).newState = (nextState
-            << (elements[u as usize]).nbBits as core::ffi::c_int)
-            .wrapping_sub(tableSize) as u16;
+        elt.nbBits = tableLog.wrapping_sub(nextState.ilog2()) as u8;
+        elt.newState = (nextState << elt.nbBits).wrapping_sub(tableSize as u32) as u16;
     }
 
     Ok(())
 }
 
 #[inline(always)]
-fn FSE_decompress_usingDTable_generic(
+fn FSE_getSymbol<const FAST: bool>(state: &mut FSE_DState_t<'_>, bitD: &mut BIT_DStream_t) -> u8 {
+    if FAST {
+        state.decode_symbol_fast(bitD)
+    } else {
+        state.decode_symbol(bitD)
+    }
+}
+
+#[inline(always)]
+fn FSE_decompress_usingDTable_generic<const FAST: bool>(
     dst: &mut [u8],
     cSrc: &[u8],
     dt: &DTable,
-    fast: bool,
 ) -> Result<usize, Error> {
-    enum Mode {
-        Slow,
-        Fast,
-    }
-
-    let mode = if fast { Mode::Fast } else { Mode::Slow };
-
     let mut op = 0;
     let omax = dst.len();
     let olimit = omax - 3;
@@ -227,45 +209,28 @@ fn FSE_decompress_usingDTable_generic(
     }
 
     while bitD.reload() == StreamStatus::Unfinished && op < olimit {
-        dst[op] = match mode {
-            Mode::Fast => state1.decode_symbol_fast(&mut bitD),
-            Mode::Slow => state1.decode_symbol(&mut bitD),
-        };
+        dst[op] = FSE_getSymbol::<FAST>(&mut state1, &mut bitD);
 
-        if (FSE_MAX_TABLELOG * 2 + 7) as core::ffi::c_ulong
-            > (::core::mem::size_of::<usize>() as core::ffi::c_ulong).wrapping_mul(8)
-        {
+        if (FSE_MAX_TABLELOG * 2 + 7) as u32 > usize::BITS {
             let _ = bitD.reload();
         }
 
-        dst[op + 1] = match mode {
-            Mode::Fast => state2.decode_symbol_fast(&mut bitD),
-            Mode::Slow => state2.decode_symbol(&mut bitD),
-        };
+        dst[op + 1] = FSE_getSymbol::<FAST>(&mut state2, &mut bitD);
 
-        if (FSE_MAX_TABLELOG * 4 + 7) as core::ffi::c_ulong
-            > (size_of::<usize>() as core::ffi::c_ulong).wrapping_mul(8)
+        if (FSE_MAX_TABLELOG * 4 + 7) as u32 > usize::BITS
             && bitD.reload() != StreamStatus::Unfinished
         {
             op += 2;
             break;
         }
 
-        dst[op + 2] = match mode {
-            Mode::Fast => state1.decode_symbol_fast(&mut bitD),
-            Mode::Slow => state1.decode_symbol(&mut bitD),
-        };
+        dst[op + 2] = FSE_getSymbol::<FAST>(&mut state1, &mut bitD);
 
-        if (FSE_MAX_TABLELOG * 2 + 7) as core::ffi::c_ulong
-            > (::core::mem::size_of::<usize>() as core::ffi::c_ulong).wrapping_mul(8)
-        {
+        if (FSE_MAX_TABLELOG * 2 + 7) as u32 > usize::BITS {
             let _ = bitD.reload();
         }
 
-        dst[op + 3] = match mode {
-            Mode::Fast => state2.decode_symbol_fast(&mut bitD),
-            Mode::Slow => state2.decode_symbol(&mut bitD),
-        };
+        dst[op + 3] = FSE_getSymbol::<FAST>(&mut state2, &mut bitD);
 
         op += 4;
     }
@@ -275,17 +240,11 @@ fn FSE_decompress_usingDTable_generic(
             return Err(Error::dstSize_tooSmall);
         }
 
-        dst[op] = match mode {
-            Mode::Fast => state1.decode_symbol_fast(&mut bitD),
-            Mode::Slow => state1.decode_symbol(&mut bitD),
-        };
+        dst[op] = FSE_getSymbol::<FAST>(&mut state1, &mut bitD);
         op += 1;
 
         if let StreamStatus::Overflow = bitD.reload() {
-            dst[op] = match mode {
-                Mode::Fast => state2.decode_symbol_fast(&mut bitD),
-                Mode::Slow => state2.decode_symbol(&mut bitD),
-            };
+            dst[op] = FSE_getSymbol::<FAST>(&mut state2, &mut bitD);
             op += 1;
             break;
         } else {
@@ -293,10 +252,7 @@ fn FSE_decompress_usingDTable_generic(
                 return Err(Error::dstSize_tooSmall);
             }
 
-            dst[op] = match mode {
-                Mode::Fast => state2.decode_symbol_fast(&mut bitD),
-                Mode::Slow => state2.decode_symbol(&mut bitD),
-            };
+            dst[op] = FSE_getSymbol::<FAST>(&mut state2, &mut bitD);
             op += 1;
 
             match bitD.reload() {
@@ -304,10 +260,7 @@ fn FSE_decompress_usingDTable_generic(
                 _ => continue,
             }
 
-            dst[op] = match mode {
-                Mode::Fast => state1.decode_symbol_fast(&mut bitD),
-                Mode::Slow => state1.decode_symbol(&mut bitD),
-            };
+            dst[op] = FSE_getSymbol::<FAST>(&mut state1, &mut bitD);
             op += 1;
 
             break;
@@ -325,13 +278,9 @@ fn FSE_decompress_wksp_body(
     workspace: &mut Workspace,
     bmi2: core::ffi::c_int,
 ) -> Result<size_t, Error> {
-    let mut wkspSize = size_of::<Workspace>();
-
     let mut tableLog: core::ffi::c_uint = 0;
-    let mut maxSymbolValue = FSE_MAX_SYMBOL_VALUE as core::ffi::c_uint;
-    if wkspSize < ::core::mem::size_of::<FSE_DecompressWksp>() {
-        return Err(Error::GENERIC);
-    }
+    let mut maxSymbolValue = FSE_MAX_SYMBOL_VALUE;
+    const { assert!(size_of::<Workspace>() >= size_of::<FSE_DecompressWksp>()) };
     let NCountLength = FSE_readNCount_bmi2(
         &mut workspace.a.ncount,
         &mut maxSymbolValue,
@@ -344,36 +293,11 @@ fn FSE_decompress_wksp_body(
         return Err(Error::tableLog_tooLarge);
     }
     let ip = &cSrc[NCountLength as usize..];
-    if ((1 + ((1) << tableLog) + 1) as core::ffi::c_ulonglong)
-        .wrapping_add(
-            ((::core::mem::size_of::<core::ffi::c_short>() as core::ffi::c_ulong)
-                .wrapping_mul(maxSymbolValue.wrapping_add(1) as core::ffi::c_ulong)
-                as core::ffi::c_ulonglong)
-                .wrapping_add((1) << tableLog)
-                .wrapping_add(8)
-                .wrapping_add(
-                    ::core::mem::size_of::<core::ffi::c_uint>() as core::ffi::c_ulong
-                        as core::ffi::c_ulonglong,
-                )
-                .wrapping_sub(1)
-                .wrapping_div(
-                    ::core::mem::size_of::<core::ffi::c_uint>() as core::ffi::c_ulong
-                        as core::ffi::c_ulonglong,
-                ),
-        )
-        .wrapping_add(FSE_MAX_SYMBOL_VALUE.div_ceil(2) as core::ffi::c_ulonglong)
-        .wrapping_add(1)
-        .wrapping_mul(
-            ::core::mem::size_of::<core::ffi::c_uint>() as core::ffi::c_ulong
-                as core::ffi::c_ulonglong,
-        )
-        > wkspSize as core::ffi::c_ulonglong
+
+    if FSE_DECOMPRESS_WKSP_SIZE(tableLog as usize, maxSymbolValue as usize) > size_of::<Workspace>()
     {
         return Err(Error::tableLog_tooLarge);
     }
-    wkspSize = wkspSize.wrapping_sub((::core::mem::size_of::<FSE_DecompressWksp>()).wrapping_add(
-        (1usize + (1 << tableLog)).wrapping_mul(::core::mem::size_of::<FSE_DTable>()),
-    ));
 
     let () = FSE_buildDTable_internal(
         &mut workspace.dtable,
@@ -382,12 +306,11 @@ fn FSE_decompress_wksp_body(
         tableLog,
     )?;
 
-    FSE_decompress_usingDTable_generic(
-        dst,
-        ip,
-        &workspace.dtable,
-        workspace.dtable.header.fastMode != 0,
-    )
+    if workspace.dtable.header.fastMode != 0 {
+        FSE_decompress_usingDTable_generic::<true>(dst, ip, &workspace.dtable)
+    } else {
+        FSE_decompress_usingDTable_generic::<false>(dst, ip, &workspace.dtable)
+    }
 }
 
 fn FSE_decompress_wksp_body_default(
@@ -399,6 +322,7 @@ fn FSE_decompress_wksp_body_default(
     FSE_decompress_wksp_body(dst, cSrc, maxLog, workSpace, 0)
 }
 
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "bmi2"))]
 fn FSE_decompress_wksp_body_bmi2(
     dst: &mut [u8],
     cSrc: &[u8],
@@ -416,7 +340,8 @@ pub(super) fn FSE_decompress_wksp_bmi2(
     bmi2: bool,
 ) -> Result<size_t, Error> {
     if bmi2 {
-        FSE_decompress_wksp_body_bmi2(dst, cSrc, maxLog, workSpace)
+        // SAFETY: the bmi2 feature is enabled.
+        unsafe { FSE_decompress_wksp_body_bmi2(dst, cSrc, maxLog, workSpace) }
     } else {
         FSE_decompress_wksp_body_default(dst, cSrc, maxLog, workSpace)
     }

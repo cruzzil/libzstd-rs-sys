@@ -27,13 +27,13 @@ use libzstd_rs_sys::lib::decompress::zstd_decompress::{
 };
 use libzstd_rs_sys::lib::decompress::{ZSTD_DCtx, ZSTD_FrameHeader, ZSTD_frame};
 use libzstd_rs_sys::lib::zstd::{
-    ZSTD_ParamSwitch_e, ZSTD_ResetDirective, ZSTD_btlazy2, ZSTD_btopt, ZSTD_cParameter,
+    Format, ParamSwitch, ZSTD_ResetDirective, ZSTD_btlazy2, ZSTD_btopt, ZSTD_cParameter,
     ZSTD_compressionParameters, ZSTD_dParameter, ZSTD_error_frameParameter_windowTooLarge,
     ZSTD_frameProgression, ZSTD_inBuffer, ZSTD_inBuffer_s, ZSTD_outBuffer, ZSTD_outBuffer_s,
-    ZSTD_strategy, ZSTD_BLOCKSIZE_MAX, ZSTD_CONTENTSIZE_ERROR, ZSTD_CONTENTSIZE_UNKNOWN,
-    ZSTD_FRAMEHEADERSIZE_MAX, ZSTD_MAGICNUMBER, ZSTD_MAGIC_SKIPPABLE_MASK,
-    ZSTD_MAGIC_SKIPPABLE_START, ZSTD_WINDOWLOG_LIMIT_DEFAULT, ZSTD_WINDOWLOG_MAX_32,
-    ZSTD_WINDOWLOG_MAX_64,
+    ZSTD_strategy, ZSTD_BLOCKSIZE_MAX, ZSTD_CHAINLOG_MAX, ZSTD_CONTENTSIZE_ERROR,
+    ZSTD_CONTENTSIZE_UNKNOWN, ZSTD_FRAMEHEADERSIZE_MAX, ZSTD_LDM_HASHLOG_MAX, ZSTD_MAGICNUMBER,
+    ZSTD_MAGIC_SKIPPABLE_MASK, ZSTD_MAGIC_SKIPPABLE_START, ZSTD_WINDOWLOG_LIMIT_DEFAULT,
+    ZSTD_WINDOWLOG_MAX, ZSTD_WINDOWLOG_MIN,
 };
 
 use crate::fileio_asyncio::{
@@ -338,25 +338,25 @@ pub unsafe fn FIO_zlibVersion() -> *const core::ffi::c_char {
     zlibVersion()
 }
 pub unsafe fn FIO_lz4Version() -> *const core::ffi::c_char {
-    b"Unsupported\0" as *const u8 as *const core::ffi::c_char
+    c"Unsupported".as_ptr()
 }
 pub unsafe fn FIO_lzmaVersion() -> *const core::ffi::c_char {
     lzma_version_string()
 }
 pub const ADAPT_WINDOWLOG_DEFAULT: core::ffi::c_int = 23;
-pub const DICTSIZE_MAX: core::ffi::c_int = 32 * ((1) << 20);
+pub const DICTSIZE_MAX: core::ffi::c_int = 32 * (1 << 20);
 pub const DEFAULT_FILE_PERMISSIONS: mode_t =
     S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH;
 pub const TEMPORARY_FILE_PERMISSIONS: mode_t = S_IRUSR | S_IWUSR;
 static mut g_artefact: *const core::ffi::c_char = core::ptr::null();
 unsafe extern "C" fn INThandler(sig: core::ffi::c_int) {
-    assert!(sig == SIGINT);
+    assert_eq!(sig, SIGINT);
     signal(sig, SIG_IGN);
     if !g_artefact.is_null() {
-        assert!(UTIL_isRegularFile(g_artefact) != 0);
+        assert_ne!(UTIL_isRegularFile(g_artefact), 0);
         remove(g_artefact);
     }
-    fprintf(stderr, b"\n\0" as *const u8 as *const core::ffi::c_char);
+    fprintf(stderr, c"\n".as_ptr());
     exit(2);
 }
 unsafe fn addHandler(dstFileName: *const core::ffi::c_char) {
@@ -390,34 +390,27 @@ unsafe fn FIO_shouldDisplayMultipleFileSummary(fCtx: *const FIO_ctx_t) -> core::
 pub const FIO_OVERLAP_LOG_NOTSET: core::ffi::c_int = 9999;
 pub const FIO_LDM_PARAM_NOTSET: core::ffi::c_int = 9999;
 pub unsafe fn FIO_createPreferences() -> *mut FIO_prefs_t {
-    let ret = malloc(::core::mem::size_of::<FIO_prefs_t>()) as *mut FIO_prefs_t;
+    let ret = malloc(size_of::<FIO_prefs_t>()) as *mut FIO_prefs_t;
     if ret.is_null() {
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 281,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                21,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 21);
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"Allocation error : not enough memory\0" as *const u8 as *const core::ffi::c_char,
-            );
+            fprintf(stderr, c"Allocation error : not enough memory".as_ptr());
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(21);
     }
@@ -444,7 +437,7 @@ pub unsafe fn FIO_createPreferences() -> *mut FIO_prefs_t {
     (*ret).targetCBlockSize = 0;
     (*ret).srcSizeHint = 0;
     (*ret).testMode = 0;
-    (*ret).literalCompressionMode = ZSTD_ParamSwitch_e::ZSTD_ps_auto;
+    (*ret).literalCompressionMode = ParamSwitch::Auto;
     (*ret).excludeCompressedFiles = 0;
     (*ret).allowBlockDevices = 0;
     (*ret).asyncIO = AIO_supported();
@@ -452,34 +445,27 @@ pub unsafe fn FIO_createPreferences() -> *mut FIO_prefs_t {
     ret
 }
 pub unsafe fn FIO_createContext() -> *mut FIO_ctx_t {
-    let ret = malloc(::core::mem::size_of::<FIO_ctx_t>()) as *mut FIO_ctx_t;
+    let ret = malloc(size_of::<FIO_ctx_t>()) as *mut FIO_ctx_t;
     if ret.is_null() {
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 317,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                21,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 21);
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"Allocation error : not enough memory\0" as *const u8 as *const core::ffi::c_char,
-            );
+            fprintf(stderr, c"Allocation error : not enough memory".as_ptr());
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(21);
     }
@@ -547,8 +533,7 @@ pub unsafe fn FIO_setJobSize(prefs: *mut FIO_prefs_t, jobSize: core::ffi::c_int)
     if jobSize != 0 && (*prefs).nbWorkers == 0 && g_display_prefs.displayLevel >= 2 {
         fprintf(
             stderr,
-            b"Setting block size is useless in single-thread mode \n\0" as *const u8
-                as *const core::ffi::c_char,
+            c"Setting block size is useless in single-thread mode \n".as_ptr(),
         );
     }
     (*prefs).jobSize = jobSize;
@@ -557,8 +542,7 @@ pub unsafe fn FIO_setOverlapLog(prefs: *mut FIO_prefs_t, overlapLog: core::ffi::
     if overlapLog != 0 && (*prefs).nbWorkers == 0 && g_display_prefs.displayLevel >= 2 {
         fprintf(
             stderr,
-            b"Setting overlapLog is useless in single-thread mode \n\0" as *const u8
-                as *const core::ffi::c_char,
+            c"Setting overlapLog is useless in single-thread mode \n".as_ptr(),
         );
     }
     (*prefs).overlapLog = overlapLog;
@@ -566,32 +550,27 @@ pub unsafe fn FIO_setOverlapLog(prefs: *mut FIO_prefs_t, overlapLog: core::ffi::
 pub unsafe fn FIO_setAdaptiveMode(prefs: *mut FIO_prefs_t, adapt: core::ffi::c_int) {
     if adapt > 0 && (*prefs).nbWorkers == 0 {
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 394,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                1,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 1);
         }
         if g_display_prefs.displayLevel >= 1 {
             fprintf(
                 stderr,
-                b"Adaptive mode is not compatible with single thread mode \n\0" as *const u8
-                    as *const core::ffi::c_char,
+                c"Adaptive mode is not compatible with single thread mode \n".as_ptr(),
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(1);
     }
@@ -606,32 +585,27 @@ pub unsafe fn FIO_setUseRowMatchFinder(
 pub unsafe fn FIO_setRsyncable(prefs: *mut FIO_prefs_t, rsyncable: core::ffi::c_int) {
     if rsyncable > 0 && (*prefs).nbWorkers == 0 {
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 404,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                1,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 1);
         }
         if g_display_prefs.displayLevel >= 1 {
             fprintf(
                 stderr,
-                b"Rsyncable mode is not compatible with single thread mode \n\0" as *const u8
-                    as *const core::ffi::c_char,
+                c"Rsyncable mode is not compatible with single thread mode \n".as_ptr(),
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(1);
     }
@@ -653,7 +627,7 @@ pub unsafe fn FIO_setSrcSizeHint(prefs: *mut FIO_prefs_t, srcSizeHint: size_t) {
 pub unsafe fn FIO_setTestMode(prefs: *mut FIO_prefs_t, testMode: core::ffi::c_int) {
     (*prefs).testMode = (testMode != 0) as core::ffi::c_int;
 }
-pub unsafe fn FIO_setLiteralCompressionMode(prefs: *mut FIO_prefs_t, mode: ZSTD_ParamSwitch_e) {
+pub unsafe fn FIO_setLiteralCompressionMode(prefs: *mut FIO_prefs_t, mode: ParamSwitch) {
     (*prefs).literalCompressionMode = mode;
 }
 pub unsafe fn FIO_setAdaptMin(prefs: *mut FIO_prefs_t, minCLevel: core::ffi::c_int) {
@@ -690,7 +664,7 @@ pub unsafe fn FIO_setAsyncIOFlag(prefs: *mut FIO_prefs_t, value: core::ffi::c_in
 pub unsafe fn FIO_setPassThroughFlag(prefs: *mut FIO_prefs_t, value: core::ffi::c_int) {
     (*prefs).passThrough = (value != 0) as core::ffi::c_int;
 }
-pub unsafe fn FIO_setMMapDict(prefs: *mut FIO_prefs_t, value: ZSTD_ParamSwitch_e) {
+pub unsafe fn FIO_setMMapDict(prefs: *mut FIO_prefs_t, value: ParamSwitch) {
     (*prefs).mmapDict = value;
 }
 pub unsafe fn FIO_setHasStdoutOutput(fCtx: *mut FIO_ctx_t, value: core::ffi::c_int) {
@@ -740,8 +714,7 @@ unsafe fn FIO_removeFile(path: *const core::ffi::c_char) -> core::ffi::c_int {
         if g_display_prefs.displayLevel >= 2 {
             fprintf(
                 stderr,
-                b"zstd: Failed to stat %s while trying to remove it\n\0" as *const u8
-                    as *const core::ffi::c_char,
+                c"zstd: Failed to stat %s while trying to remove it\n".as_ptr(),
                 path,
             );
         }
@@ -751,8 +724,7 @@ unsafe fn FIO_removeFile(path: *const core::ffi::c_char) -> core::ffi::c_int {
         if g_display_prefs.displayLevel >= 2 {
             fprintf(
                 stderr,
-                b"zstd: Refusing to remove non-regular file %s\n\0" as *const u8
-                    as *const core::ffi::c_char,
+                c"zstd: Refusing to remove non-regular file %s\n".as_ptr(),
                 path,
             );
         }
@@ -774,10 +746,7 @@ unsafe fn FIO_openSrcFile(
     assert!(!statbuf.is_null());
     if strcmp(srcFileName, stdinmark.as_ptr()) == 0 {
         if g_display_prefs.displayLevel >= 4 {
-            fprintf(
-                stderr,
-                b"Using stdin for input \n\0" as *const u8 as *const core::ffi::c_char,
-            );
+            fprintf(stderr, c"Using stdin for input \n".as_ptr());
         }
         return stdin;
     }
@@ -799,17 +768,13 @@ unsafe fn FIO_openSrcFile(
         if g_display_prefs.displayLevel >= 1 {
             fprintf(
                 stderr,
-                b"zstd: %s is not a regular file -- ignored \n\0" as *const u8
-                    as *const core::ffi::c_char,
+                c"zstd: %s is not a regular file -- ignored \n".as_ptr(),
                 srcFileName,
             );
         }
         return core::ptr::null_mut();
     }
-    let f = fopen(
-        srcFileName,
-        b"rb\0" as *const u8 as *const core::ffi::c_char,
-    );
+    let f = fopen(srcFileName, c"rb".as_ptr());
     if f.is_null() && g_display_prefs.displayLevel >= 1 {
         eprintln!(
             "zstd: {}: {}",
@@ -832,18 +797,15 @@ unsafe fn FIO_openDstFile(
     assert!(!dstFileName.is_null());
     if strcmp(dstFileName, stdoutmark.as_ptr()) == 0 {
         if g_display_prefs.displayLevel >= 4 {
-            fprintf(
-                stderr,
-                b"Using stdout for output \n\0" as *const u8 as *const core::ffi::c_char,
-            );
+            fprintf(stderr, c"Using stdout for output \n".as_ptr());
         }
         if (*prefs).sparseFileSupport == 1 {
             (*prefs).sparseFileSupport = 0;
             if g_display_prefs.displayLevel >= 4 {
                 fprintf(
                     stderr,
-                    b"Sparse File Support is automatically disabled on stdout ; try --sparse \n\0"
-                        as *const u8 as *const core::ffi::c_char,
+                    c"Sparse File Support is automatically disabled on stdout ; try --sparse \n"
+                        .as_ptr(),
                 );
             }
         }
@@ -853,8 +815,8 @@ unsafe fn FIO_openDstFile(
         if g_display_prefs.displayLevel >= 1 {
             fprintf(
                 stderr,
-                b"zstd: Refusing to open an output file which will overwrite the input file \n\0"
-                    as *const u8 as *const core::ffi::c_char,
+                c"zstd: Refusing to open an output file which will overwrite the input file \n"
+                    .as_ptr(),
             );
         }
         return core::ptr::null_mut();
@@ -862,33 +824,28 @@ unsafe fn FIO_openDstFile(
     if UTIL_isRegularFile(dstFileName) != 0 {
         if strcmp(dstFileName, nulmark.as_ptr()) == 0 {
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c"zstd: ".as_ptr());
             }
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                    c"Error defined at %s, line %i : \n".as_ptr(),
+                    c"fileio.c".as_ptr(),
                     614,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                    40,
-                );
+                fprintf(stderr, c"error %i : ".as_ptr(), 40);
             }
             if g_display_prefs.displayLevel >= 1 {
                 fprintf(
                     stderr,
-                    b"%s is unexpectedly categorized as a regular file\0" as *const u8
-                        as *const core::ffi::c_char,
+                    c"%s is unexpectedly categorized as a regular file".as_ptr(),
                     dstFileName,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c" \n".as_ptr());
             }
             exit(40);
         }
@@ -897,22 +854,17 @@ unsafe fn FIO_openDstFile(
                 if g_display_prefs.displayLevel >= 1 {
                     fprintf(
                         stderr,
-                        b"zstd: %s already exists; not overwritten  \n\0" as *const u8
-                            as *const core::ffi::c_char,
+                        c"zstd: %s already exists; not overwritten  \n".as_ptr(),
                         dstFileName,
                     );
                 }
                 return core::ptr::null_mut();
             }
-            fprintf(
-                stderr,
-                b"zstd: %s already exists; \0" as *const u8 as *const core::ffi::c_char,
-                dstFileName,
-            );
+            fprintf(stderr, c"zstd: %s already exists; ".as_ptr(), dstFileName);
             if UTIL_requireUserConfirmation(
-                b"overwrite (y/n) ? \0" as *const u8 as *const core::ffi::c_char,
-                b"Not overwritten  \n\0" as *const u8 as *const core::ffi::c_char,
-                b"yY\0" as *const u8 as *const core::ffi::c_char,
+                c"overwrite (y/n) ? ".as_ptr(),
+                c"Not overwritten  \n".as_ptr(),
+                c"yY".as_ptr(),
                 (*fCtx).hasStdinInput,
             ) != 0
             {
@@ -926,7 +878,7 @@ unsafe fn FIO_openDstFile(
     let fd = open(dstFileName, openflags, mode as core::ffi::c_uint);
     let mut f = core::ptr::null_mut();
     if fd != -(1) {
-        f = fdopen(fd, b"wb\0" as *const u8 as *const core::ffi::c_char);
+        f = fdopen(fd, c"wb".as_ptr());
     }
     isDstRegFile = UTIL_isFdRegularFile(fd);
     if (*prefs).sparseFileSupport == 1 {
@@ -936,8 +888,7 @@ unsafe fn FIO_openDstFile(
             if g_display_prefs.displayLevel >= 4 {
                 fprintf(
                     stderr,
-                    b"Sparse File Support is disabled when output is not a file \n\0" as *const u8
-                        as *const core::ffi::c_char,
+                    c"Sparse File Support is disabled when output is not a file \n".as_ptr(),
                 );
             }
         }
@@ -947,8 +898,7 @@ unsafe fn FIO_openDstFile(
             if g_display_prefs.displayLevel >= 1 {
                 fprintf(
                     stderr,
-                    b"zstd: error: no output specified (use -o or -c). \n\0" as *const u8
-                        as *const core::ffi::c_char,
+                    c"zstd: error: no output specified (use -o or -c). \n".as_ptr(),
                 );
             }
         } else if g_display_prefs.displayLevel >= 1 {
@@ -958,12 +908,12 @@ unsafe fn FIO_openDstFile(
                 io::Error::last_os_error(),
             );
         }
-    } else if setvbuf(f, core::ptr::null_mut(), _IOFBF, ((1) << 20) as size_t) != 0
+    } else if setvbuf(f, core::ptr::null_mut(), _IOFBF, (1 << 20) as size_t) != 0
         && g_display_prefs.displayLevel >= 2
     {
         fprintf(
             stderr,
-            b"Warning: setvbuf failed for %s\n\0" as *const u8 as *const core::ffi::c_char,
+            c"Warning: setvbuf failed for %s\n".as_ptr(),
             dstFileName,
         );
     }
@@ -976,22 +926,18 @@ unsafe fn FIO_getDictFileStat(fileName: *const core::ffi::c_char, dictFileStat: 
     }
     if UTIL_stat(fileName, dictFileStat) == 0 {
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 698,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                31,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 31);
         }
         if g_display_prefs.displayLevel >= 1 {
             eprintln!(
@@ -1004,32 +950,28 @@ unsafe fn FIO_getDictFileStat(fileName: *const core::ffi::c_char, dictFileStat: 
     }
     if UTIL_isRegularFileStat(dictFileStat) == 0 {
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 702,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                32,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 32);
         }
         if g_display_prefs.displayLevel >= 1 {
             fprintf(
                 stderr,
-                b"Dictionary %s must be a regular file.\0" as *const u8 as *const core::ffi::c_char,
+                c"Dictionary %s must be a regular file.".as_ptr(),
                 fileName,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(32);
     }
@@ -1050,31 +992,23 @@ unsafe fn FIO_setDictBufferMalloc(
         return 0;
     }
     if g_display_prefs.displayLevel >= 4 {
-        fprintf(
-            stderr,
-            b"Loading %s as dictionary \n\0" as *const u8 as *const core::ffi::c_char,
-            fileName,
-        );
+        fprintf(stderr, c"Loading %s as dictionary \n".as_ptr(), fileName);
     }
-    fileHandle = fopen(fileName, b"rb\0" as *const u8 as *const core::ffi::c_char);
+    fileHandle = fopen(fileName, c"rb".as_ptr());
     if fileHandle.is_null() {
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 728,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                33,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 33);
         }
         if g_display_prefs.displayLevel >= 1 {
             eprintln!(
@@ -1093,56 +1027,47 @@ unsafe fn FIO_setDictBufferMalloc(
     }) as size_t;
     if fileSize > dictSizeMax {
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 736,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                34,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 34);
         }
         if g_display_prefs.displayLevel >= 1 {
             fprintf(
                 stderr,
-                b"Dictionary file %s is too large (> %u bytes)\0" as *const u8
-                    as *const core::ffi::c_char,
+                c"Dictionary file %s is too large (> %u bytes)".as_ptr(),
                 fileName,
                 dictSizeMax as core::ffi::c_uint,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(34);
     }
     *bufferPtr = malloc(fileSize);
     if (*bufferPtr).is_null() {
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 740,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                34,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 34);
         }
         if g_display_prefs.displayLevel >= 1 {
             eprintln!("{}", io::Error::last_os_error());
@@ -1152,22 +1077,18 @@ unsafe fn FIO_setDictBufferMalloc(
     let readSize = fread(*bufferPtr, 1, fileSize, fileHandle);
     if readSize != fileSize {
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 744,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                35,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 35);
         }
         if g_display_prefs.displayLevel >= 1 {
             eprintln!(
@@ -1204,31 +1125,23 @@ unsafe fn FIO_setDictBufferMMap(
         return 0;
     }
     if g_display_prefs.displayLevel >= 4 {
-        fprintf(
-            stderr,
-            b"Loading %s as dictionary \n\0" as *const u8 as *const core::ffi::c_char,
-            fileName,
-        );
+        fprintf(stderr, c"Loading %s as dictionary \n".as_ptr(), fileName);
     }
     fileHandle = open(fileName, O_RDONLY);
     if fileHandle == -(1) {
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 775,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                33,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 33);
         }
         if g_display_prefs.displayLevel >= 1 {
             eprintln!(
@@ -1247,34 +1160,29 @@ unsafe fn FIO_setDictBufferMMap(
     }) as size_t;
     if fileSize as size_t > dictSizeMax {
         if g_display_prefs.displayLevel >= 1 as core::ffi::c_int {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 783,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                34,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 34);
         }
         if g_display_prefs.displayLevel >= 1 {
             fprintf(
                 stderr,
-                b"Dictionary file %s is too large (> %u bytes)\0" as *const u8
-                    as *const core::ffi::c_char,
+                c"Dictionary file %s is too large (> %u bytes)".as_ptr(),
                 fileName,
                 dictSizeMax as core::ffi::c_uint,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(34);
     }
@@ -1288,28 +1196,24 @@ unsafe fn FIO_setDictBufferMMap(
     );
     if (*bufferPtr).is_null() {
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 788,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                34,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 34);
         }
         if g_display_prefs.displayLevel >= 1 {
             eprintln!("{}", io::Error::last_os_error());
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(34);
     }
@@ -1360,14 +1264,13 @@ pub unsafe fn FIO_checkFilenameCollisions(
     let mut filename = core::ptr::null::<core::ffi::c_char>();
     let mut u: core::ffi::c_uint = 0;
     filenameTableSorted =
-        malloc((::core::mem::size_of::<*mut core::ffi::c_char>()).wrapping_mul(nbFiles as size_t))
+        malloc(size_of::<*mut core::ffi::c_char>().wrapping_mul(nbFiles as size_t))
             as *mut *const core::ffi::c_char;
     if filenameTableSorted.is_null() {
         if g_display_prefs.displayLevel >= 1 {
             fprintf(
                 stderr,
-                b"Allocation error during filename collision checking \n\0" as *const u8
-                    as *const core::ffi::c_char,
+                c"Allocation error during filename collision checking \n".as_ptr(),
             );
         }
         return 1;
@@ -1387,7 +1290,7 @@ pub unsafe fn FIO_checkFilenameCollisions(
     qsort(
         filenameTableSorted as *mut core::ffi::c_void,
         nbFiles as size_t,
-        ::core::mem::size_of::<*mut core::ffi::c_char>(),
+        size_of::<*mut core::ffi::c_char>(),
         Some(
             UTIL_compareStr
                 as unsafe extern "C" fn(
@@ -1404,8 +1307,7 @@ pub unsafe fn FIO_checkFilenameCollisions(
         {
             fprintf(
                 stderr,
-                b"WARNING: Two files have same filename: %s\n\0" as *const u8
-                    as *const core::ffi::c_char,
+                c"WARNING: Two files have same filename: %s\n".as_ptr(),
                 prevElem,
             );
         }
@@ -1445,22 +1347,18 @@ unsafe fn FIO_createFilename_fromOutDir(
     ) as *mut core::ffi::c_char;
     if result.is_null() {
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 945,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                30,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 30);
         }
         if g_display_prefs.displayLevel >= 1 {
             eprintln!(
@@ -1499,7 +1397,7 @@ unsafe fn FIO_createFilename_fromOutDir(
 }
 unsafe fn FIO_highbit64(mut v: core::ffi::c_ulonglong) -> core::ffi::c_uint {
     let mut count = 0 as core::ffi::c_uint;
-    assert!(v != 0);
+    assert_ne!(v, 0);
     v >>= 1;
     while v != 0 {
         v >>= 1;
@@ -1524,75 +1422,60 @@ unsafe fn FIO_adjustMemLimitForPatchFromMode(
     } else {
         maxSrcFileSize
     };
-    let maxWindowSize = (1 as core::ffi::c_uint)
-        << (if ::core::mem::size_of::<size_t>() == 4 {
-            ZSTD_WINDOWLOG_MAX_32
-        } else {
-            ZSTD_WINDOWLOG_MAX_64
-        });
+    let maxWindowSize = (1 as core::ffi::c_uint) << ZSTD_WINDOWLOG_MAX as core::ffi::c_uint;
     if maxSize == UTIL_FILESIZE_UNKNOWN as core::ffi::c_ulonglong {
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 979,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                42,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 42);
         }
         if g_display_prefs.displayLevel >= 1 {
             fprintf(
                 stderr,
-                b"Using --patch-from with stdin requires --stream-size\0" as *const u8
-                    as *const core::ffi::c_char,
+                c"Using --patch-from with stdin requires --stream-size".as_ptr(),
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(42);
     }
-    assert!(maxSize != UTIL_FILESIZE_UNKNOWN as core::ffi::c_ulonglong);
+    assert_ne!(maxSize, UTIL_FILESIZE_UNKNOWN as core::ffi::c_ulonglong);
     if maxSize > maxWindowSize as core::ffi::c_ulonglong {
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 982,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                42,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 42);
         }
         if g_display_prefs.displayLevel >= 1 {
             fprintf(
                 stderr,
-                b"Can't handle files larger than %u GB\n\0" as *const u8
-                    as *const core::ffi::c_char,
+                c"Can't handle files larger than %u GB\n".as_ptr(),
                 maxWindowSize.wrapping_div(
                     (1 as core::ffi::c_uint).wrapping_mul((1 as core::ffi::c_uint) << 30),
                 ),
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(42);
     }
@@ -1606,64 +1489,54 @@ unsafe fn FIO_multiFilesConcatWarning(
 ) -> core::ffi::c_int {
     if (*fCtx).hasStdoutOutput != 0 && (*prefs).removeSrcFile != 0 {
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 1009,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                43,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 43);
         }
         if g_display_prefs.displayLevel >= 1 {
             fprintf(
                     stderr,
-                    b"It's not allowed to remove input files when processed output is piped to stdout. This scenario is not supposed to be possible. This is a programming error. File an issue for it to be fixed.\0"
-                        as *const u8 as *const core::ffi::c_char,
+                    c"It's not allowed to remove input files when processed output is piped to stdout. This scenario is not supposed to be possible. This is a programming error. File an issue for it to be fixed.".as_ptr(),
                 );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(43);
     }
     if (*prefs).testMode != 0 {
         if (*prefs).removeSrcFile != 0 {
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c"zstd: ".as_ptr());
             }
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                    c"Error defined at %s, line %i : \n".as_ptr(),
+                    c"fileio.c".as_ptr(),
                     1017,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                    43,
-                );
+                fprintf(stderr, c"error %i : ".as_ptr(), 43);
             }
             if g_display_prefs.displayLevel >= 1 {
                 fprintf(
                     stderr,
-                    b"Test mode shall not remove input files! This scenario is not supposed to be possible. This is a programming error. File an issue for it to be fixed.\0"
-                        as *const u8 as *const core::ffi::c_char,
+                    c"Test mode shall not remove input files! This scenario is not supposed to be possible. This is a programming error. File an issue for it to be fixed.".as_ptr(),
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c" \n".as_ptr());
             }
             exit(43);
         }
@@ -1680,31 +1553,27 @@ unsafe fn FIO_multiFilesConcatWarning(
         if g_display_prefs.displayLevel >= 2 {
             fprintf(
                 stderr,
-                b"zstd: WARNING: all input files will be processed and concatenated into stdout. \n\0"
-                    as *const u8 as *const core::ffi::c_char,
+                c"zstd: WARNING: all input files will be processed and concatenated into stdout. \n".as_ptr(),
             );
         }
     } else if g_display_prefs.displayLevel >= 2 {
         fprintf(
             stderr,
-            b"zstd: WARNING: all input files will be processed and concatenated into a single output file: %s \n\0"
-                as *const u8 as *const core::ffi::c_char,
+            c"zstd: WARNING: all input files will be processed and concatenated into a single output file: %s \n".as_ptr(),
             outFileName,
         );
     }
     if g_display_prefs.displayLevel >= 2 {
         fprintf(
             stderr,
-            b"The concatenated output CANNOT regenerate original file names nor directory structure. \n\0"
-                as *const u8 as *const core::ffi::c_char,
+            c"The concatenated output CANNOT regenerate original file names nor directory structure. \n".as_ptr(),
         );
     }
     if (*prefs).removeSrcFile != 0 {
         if g_display_prefs.displayLevel >= 2 {
             fprintf(
                 stderr,
-                b"Since it's a destructive operation, input files will not be removed. \n\0"
-                    as *const u8 as *const core::ffi::c_char,
+                c"Since it's a destructive operation, input files will not be removed. \n".as_ptr(),
             );
         }
         (*prefs).removeSrcFile = 0;
@@ -1719,46 +1588,34 @@ unsafe fn FIO_multiFilesConcatWarning(
         if g_display_prefs.displayLevel >= 1 {
             fprintf(
                 stderr,
-                b"Concatenating multiple processed inputs into a single output loses file metadata. \n\0"
-                    as *const u8 as *const core::ffi::c_char,
+                c"Concatenating multiple processed inputs into a single output loses file metadata. \n".as_ptr(),
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"Aborting. \n\0" as *const u8 as *const core::ffi::c_char,
-            );
+            fprintf(stderr, c"Aborting. \n".as_ptr());
         }
         return 1;
     }
     UTIL_requireUserConfirmation(
-        b"Proceed? (y/n): \0" as *const u8 as *const core::ffi::c_char,
-        b"Aborting...\0" as *const u8 as *const core::ffi::c_char,
-        b"yY\0" as *const u8 as *const core::ffi::c_char,
+        c"Proceed? (y/n): ".as_ptr(),
+        c"Aborting...".as_ptr(),
+        c"yY".as_ptr(),
         (*fCtx).hasStdinInput,
     )
 }
-unsafe fn setInBuffer(buf: *const core::ffi::c_void, s: size_t, pos: size_t) -> ZSTD_inBuffer {
-    let mut i = ZSTD_inBuffer_s {
-        src: core::ptr::null::<core::ffi::c_void>(),
-        size: 0,
-        pos: 0,
-    };
-    i.src = buf;
-    i.size = s;
-    i.pos = pos;
-    i
+unsafe fn setInBuffer(buf: *const core::ffi::c_void, size: size_t, pos: size_t) -> ZSTD_inBuffer {
+    ZSTD_inBuffer_s {
+        src: buf,
+        size,
+        pos,
+    }
 }
-unsafe fn setOutBuffer(buf: *mut core::ffi::c_void, s: size_t, pos: size_t) -> ZSTD_outBuffer {
-    let mut o = ZSTD_outBuffer_s {
-        dst: core::ptr::null_mut::<core::ffi::c_void>(),
-        size: 0,
-        pos: 0,
-    };
-    o.dst = buf;
-    o.size = s;
-    o.pos = pos;
-    o
+unsafe fn setOutBuffer(buf: *mut core::ffi::c_void, size: size_t, pos: size_t) -> ZSTD_outBuffer {
+    ZSTD_outBuffer_s {
+        dst: buf,
+        size,
+        pos,
+    }
 }
 unsafe fn ZSTD_cycleLog(hashLog: u32, strat: ZSTD_strategy) -> u32 {
     let btScale = (strat >= ZSTD_btlazy2 as core::ffi::c_int as u32) as core::ffi::c_int as u32;
@@ -1779,58 +1636,20 @@ unsafe fn FIO_adjustParamsForPatchFromMode(
         dictSize as size_t,
     );
     FIO_adjustMemLimitForPatchFromMode(prefs, dictSize, maxSrcFileSize);
-    if fileWindowLog
-        > (if ::core::mem::size_of::<size_t>() == 4 {
-            ZSTD_WINDOWLOG_MAX_32
-        } else {
-            ZSTD_WINDOWLOG_MAX_64
-        }) as core::ffi::c_uint
-        && g_display_prefs.displayLevel >= 1
+    if fileWindowLog > ZSTD_WINDOWLOG_MAX as core::ffi::c_uint && g_display_prefs.displayLevel >= 1
     {
         fprintf(
             stderr,
-            b"Max window log exceeded by file (compression ratio will suffer)\n\0" as *const u8
-                as *const core::ffi::c_char,
+            c"Max window log exceeded by file (compression ratio will suffer)\n".as_ptr(),
         );
     }
-    (*comprParams).windowLog = if 10
-        > (if ((if ::core::mem::size_of::<size_t>() == 4 {
-            30
-        } else {
-            31
-        }) as core::ffi::c_uint)
-            < fileWindowLog
-        {
-            (if ::core::mem::size_of::<size_t>() == 4 {
-                30
-            } else {
-                31
-            }) as core::ffi::c_uint
-        } else {
-            fileWindowLog
-        }) {
-        10
-    } else if ((if ::core::mem::size_of::<size_t>() == 4 {
-        30
-    } else {
-        31
-    }) as core::ffi::c_uint)
-        < fileWindowLog
-    {
-        (if ::core::mem::size_of::<size_t>() == 4 {
-            30
-        } else {
-            31
-        }) as core::ffi::c_uint
-    } else {
-        fileWindowLog
-    };
+    (*comprParams).windowLog = fileWindowLog.clamp(
+        ZSTD_WINDOWLOG_MIN as core::ffi::c_uint,
+        ZSTD_WINDOWLOG_MAX as core::ffi::c_uint,
+    );
     if fileWindowLog > ZSTD_cycleLog(cParams.chainLog, cParams.strategy) {
         if (*prefs).ldmFlag == 0 && g_display_prefs.displayLevel >= 2 {
-            fprintf(
-                stderr,
-                b"long mode automatically triggered\n\0" as *const u8 as *const core::ffi::c_char,
-            );
+            fprintf(stderr, c"long mode automatically triggered\n".as_ptr());
         }
         FIO_setLdmFlag(prefs, 1);
     }
@@ -1839,63 +1658,40 @@ unsafe fn FIO_adjustParamsForPatchFromMode(
         if g_display_prefs.displayLevel >= 4 {
             fprintf(
                 stderr,
-                b"[Optimal parser notes] Consider the following to improve patch size at the cost of speed:\n\0"
-                    as *const u8 as *const core::ffi::c_char,
+                c"[Optimal parser notes] Consider the following to improve patch size at the cost of speed:\n".as_ptr(),
             );
         }
         if g_display_prefs.displayLevel >= 4 {
             fprintf(
                 stderr,
-                b"- Set a larger targetLength (e.g. --zstd=targetLength=4096)\n\0" as *const u8
-                    as *const core::ffi::c_char,
+                c"- Set a larger targetLength (e.g. --zstd=targetLength=4096)\n".as_ptr(),
             );
         }
         if g_display_prefs.displayLevel >= 4 {
             fprintf(
                 stderr,
-                b"- Set a larger chainLog (e.g. --zstd=chainLog=%u)\n\0" as *const u8
-                    as *const core::ffi::c_char,
-                if ::core::mem::size_of::<size_t>() == 4 {
-                    29
-                } else {
-                    30
-                },
+                c"- Set a larger chainLog (e.g. --zstd=chainLog=%u)\n".as_ptr(),
+                ZSTD_CHAINLOG_MAX,
             );
         }
         if g_display_prefs.displayLevel >= 4 {
             fprintf(
                 stderr,
-                b"- Set a larger LDM hashLog (e.g. --zstd=ldmHashLog=%u)\n\0" as *const u8
-                    as *const core::ffi::c_char,
-                if (if ::core::mem::size_of::<size_t>() == 4 {
-                    30
-                } else {
-                    31
-                }) < 30
-                {
-                    if ::core::mem::size_of::<size_t>() == 4 {
-                        30
-                    } else {
-                        31
-                    }
-                } else {
-                    30
-                },
+                c"- Set a larger LDM hashLog (e.g. --zstd=ldmHashLog=%u)\n".as_ptr(),
+                ZSTD_LDM_HASHLOG_MAX,
             );
         }
         if g_display_prefs.displayLevel >= 4 {
             fprintf(
                 stderr,
-                b"- Set a smaller LDM rateLog (e.g. --zstd=ldmHashRateLog=%u)\n\0" as *const u8
-                    as *const core::ffi::c_char,
+                c"- Set a smaller LDM rateLog (e.g. --zstd=ldmHashRateLog=%u)\n".as_ptr(),
                 0,
             );
         }
         if g_display_prefs.displayLevel >= 4 {
             fprintf(
                 stderr,
-                b"Also consider playing around with searchLog and hashLog\n\0" as *const u8
-                    as *const core::ffi::c_char,
+                c"Also consider playing around with searchLog and hashLog\n".as_ptr(),
             );
         }
     }
@@ -1907,9 +1703,8 @@ unsafe fn FIO_createCResources(
     cLevel: core::ffi::c_int,
     mut comprParams: ZSTD_compressionParameters,
 ) -> cRess_t {
-    let mut useMMap = ((*prefs).mmapDict == ZSTD_ParamSwitch_e::ZSTD_ps_enable) as core::ffi::c_int;
-    let forceNoUseMMap =
-        ((*prefs).mmapDict == ZSTD_ParamSwitch_e::ZSTD_ps_disable) as core::ffi::c_int;
+    let mut useMMap = ((*prefs).mmapDict == ParamSwitch::Enable) as core::ffi::c_int;
+    let forceNoUseMMap = ((*prefs).mmapDict == ParamSwitch::Disable) as core::ffi::c_int;
     let mut dictBufferType = FIO_mallocDict;
     let mut ress = cRess_t {
         dict: FIO_Dict_t {
@@ -1951,33 +1746,26 @@ unsafe fn FIO_createCResources(
     ptr::write_bytes(
         &mut ress as *mut cRess_t as *mut u8,
         0,
-        ::core::mem::size_of::<cRess_t>(),
+        size_of::<cRess_t>(),
     );
     if g_display_prefs.displayLevel >= 6 {
-        fprintf(
-            stderr,
-            b"FIO_createCResources \n\0" as *const u8 as *const core::ffi::c_char,
-        );
+        fprintf(stderr, c"FIO_createCResources \n".as_ptr());
     }
     ress.cctx = ZSTD_createCCtx();
     if (ress.cctx).is_null() {
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 1134,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                30,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 30);
         }
         if g_display_prefs.displayLevel >= 1 {
             eprintln!(
@@ -1986,7 +1774,7 @@ unsafe fn FIO_createCResources(
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(30);
     }
@@ -2019,32 +1807,27 @@ unsafe fn FIO_createCResources(
     ress.readCtx = AIO_ReadPool_create(prefs, ZSTD_CStreamInSize());
     if !dictFileName.is_null() && (ress.dict.dictBuffer).is_null() {
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 1155,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                32,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 32);
         }
         if g_display_prefs.displayLevel >= 1 {
             fprintf(
                 stderr,
-                b"allocation error : can't create dictBuffer\0" as *const u8
-                    as *const core::ffi::c_char,
+                c"allocation error : can't create dictBuffer".as_ptr(),
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(32);
     }
@@ -2062,38 +1845,29 @@ unsafe fn FIO_createCResources(
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                b"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_contentSizeFlag, prefs->contentSize)\0"
-                    as *const u8 as *const core::ffi::c_char,
+                c"%s \n".as_ptr(),
+                c"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_contentSizeFlag, prefs->contentSize)".as_ptr(),
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 1161,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                11,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 11);
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"%s\0" as *const u8 as *const core::ffi::c_char,
-                ZSTD_getErrorName(err),
-            );
+            fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err));
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(11);
     }
@@ -2107,38 +1881,29 @@ unsafe fn FIO_createCResources(
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                b"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_dictIDFlag, prefs->dictIDFlag)\0"
-                    as *const u8 as *const core::ffi::c_char,
+                c"%s \n".as_ptr(),
+                c"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_dictIDFlag, prefs->dictIDFlag)".as_ptr(),
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 1162,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                11,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 11);
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"%s\0" as *const u8 as *const core::ffi::c_char,
-                ZSTD_getErrorName(err_0),
-            );
+            fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err_0));
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(11);
     }
@@ -2152,38 +1917,29 @@ unsafe fn FIO_createCResources(
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                b"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_checksumFlag, prefs->checksumFlag)\0"
-                    as *const u8 as *const core::ffi::c_char,
+                c"%s \n".as_ptr(),
+                c"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_checksumFlag, prefs->checksumFlag)".as_ptr(),
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 1163,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                11,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 11);
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"%s\0" as *const u8 as *const core::ffi::c_char,
-                ZSTD_getErrorName(err_1),
-            );
+            fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err_1));
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(11);
     }
@@ -2193,38 +1949,29 @@ unsafe fn FIO_createCResources(
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                b"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_compressionLevel, cLevel)\0" as *const u8
-                    as *const core::ffi::c_char,
+                c"%s \n".as_ptr(),
+                c"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_compressionLevel, cLevel)".as_ptr(),
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 1165,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                11,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 11);
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"%s\0" as *const u8 as *const core::ffi::c_char,
-                ZSTD_getErrorName(err_2),
-            );
+            fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err_2));
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(11);
     }
@@ -2238,38 +1985,29 @@ unsafe fn FIO_createCResources(
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                b"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_targetCBlockSize, (int)prefs->targetCBlockSize)\0"
-                    as *const u8 as *const core::ffi::c_char,
+                c"%s \n".as_ptr(),
+                c"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_targetCBlockSize, (int)prefs->targetCBlockSize)".as_ptr(),
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 1167,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                11,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 11);
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"%s\0" as *const u8 as *const core::ffi::c_char,
-                ZSTD_getErrorName(err_3),
-            );
+            fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err_3));
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(11);
     }
@@ -2283,38 +2021,29 @@ unsafe fn FIO_createCResources(
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                b"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_experimentalParam7, (int)prefs->srcSizeHint)\0"
-                    as *const u8 as *const core::ffi::c_char,
+                c"%s \n".as_ptr(),
+                c"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_experimentalParam7, (int)prefs->srcSizeHint)".as_ptr(),
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 1169,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                11,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 11);
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"%s\0" as *const u8 as *const core::ffi::c_char,
-                ZSTD_getErrorName(err_4),
-            );
+            fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err_4));
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(11);
     }
@@ -2328,38 +2057,29 @@ unsafe fn FIO_createCResources(
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                b"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_enableLongDistanceMatching, prefs->ldmFlag)\0"
-                    as *const u8 as *const core::ffi::c_char,
+                c"%s \n".as_ptr(),
+                c"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_enableLongDistanceMatching, prefs->ldmFlag)".as_ptr(),
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 1171,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                11,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 11);
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"%s\0" as *const u8 as *const core::ffi::c_char,
-                ZSTD_getErrorName(err_5),
-            );
+            fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err_5));
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(11);
     }
@@ -2373,38 +2093,29 @@ unsafe fn FIO_createCResources(
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                b"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_ldmHashLog, prefs->ldmHashLog)\0"
-                    as *const u8 as *const core::ffi::c_char,
+                c"%s \n".as_ptr(),
+                c"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_ldmHashLog, prefs->ldmHashLog)".as_ptr(),
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 1172,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                11,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 11);
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"%s\0" as *const u8 as *const core::ffi::c_char,
-                ZSTD_getErrorName(err_6),
-            );
+            fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err_6));
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(11);
     }
@@ -2418,38 +2129,29 @@ unsafe fn FIO_createCResources(
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                b"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_ldmMinMatch, prefs->ldmMinMatch)\0"
-                    as *const u8 as *const core::ffi::c_char,
+                c"%s \n".as_ptr(),
+                c"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_ldmMinMatch, prefs->ldmMinMatch)".as_ptr(),
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 1173,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                11,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 11);
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"%s\0" as *const u8 as *const core::ffi::c_char,
-                ZSTD_getErrorName(err_7),
-            );
+            fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err_7));
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(11);
     }
@@ -2464,38 +2166,29 @@ unsafe fn FIO_createCResources(
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_ldmBucketSizeLog, prefs->ldmBucketSizeLog)\0"
-                        as *const u8 as *const core::ffi::c_char,
+                    c"%s \n".as_ptr(),
+                    c"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_ldmBucketSizeLog, prefs->ldmBucketSizeLog)".as_ptr(),
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c"zstd: ".as_ptr());
             }
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                    c"Error defined at %s, line %i : \n".as_ptr(),
+                    c"fileio.c".as_ptr(),
                     1175,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                    11,
-                );
+                fprintf(stderr, c"error %i : ".as_ptr(), 11);
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"%s\0" as *const u8 as *const core::ffi::c_char,
-                    ZSTD_getErrorName(err_8),
-                );
+                fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err_8));
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c" \n".as_ptr());
             }
             exit(11);
         }
@@ -2511,38 +2204,29 @@ unsafe fn FIO_createCResources(
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_ldmHashRateLog, prefs->ldmHashRateLog)\0"
-                        as *const u8 as *const core::ffi::c_char,
+                    c"%s \n".as_ptr(),
+                    c"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_ldmHashRateLog, prefs->ldmHashRateLog)".as_ptr(),
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c"zstd: ".as_ptr());
             }
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                    c"Error defined at %s, line %i : \n".as_ptr(),
+                    c"fileio.c".as_ptr(),
                     1178,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                    11,
-                );
+                fprintf(stderr, c"error %i : ".as_ptr(), 11);
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"%s\0" as *const u8 as *const core::ffi::c_char,
-                    ZSTD_getErrorName(err_9),
-                );
+                fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err_9));
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c" \n".as_ptr());
             }
             exit(11);
         }
@@ -2557,38 +2241,29 @@ unsafe fn FIO_createCResources(
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                b"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_experimentalParam14, prefs->useRowMatchFinder)\0"
-                    as *const u8 as *const core::ffi::c_char,
+                c"%s \n".as_ptr(),
+                c"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_experimentalParam14, prefs->useRowMatchFinder)".as_ptr(),
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 1180,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                11,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 11);
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"%s\0" as *const u8 as *const core::ffi::c_char,
-                ZSTD_getErrorName(err_10),
-            );
+            fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err_10));
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(11);
     }
@@ -2602,38 +2277,29 @@ unsafe fn FIO_createCResources(
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                b"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_windowLog, (int)comprParams.windowLog)\0"
-                    as *const u8 as *const core::ffi::c_char,
+                c"%s \n".as_ptr(),
+                c"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_windowLog, (int)comprParams.windowLog)".as_ptr(),
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 1182,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                11,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 11);
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"%s\0" as *const u8 as *const core::ffi::c_char,
-                ZSTD_getErrorName(err_11),
-            );
+            fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err_11));
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(11);
     }
@@ -2647,38 +2313,29 @@ unsafe fn FIO_createCResources(
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                b"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_chainLog, (int)comprParams.chainLog)\0"
-                    as *const u8 as *const core::ffi::c_char,
+                c"%s \n".as_ptr(),
+                c"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_chainLog, (int)comprParams.chainLog)".as_ptr(),
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 1183,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                11,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 11);
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"%s\0" as *const u8 as *const core::ffi::c_char,
-                ZSTD_getErrorName(err_12),
-            );
+            fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err_12));
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(11);
     }
@@ -2692,38 +2349,29 @@ unsafe fn FIO_createCResources(
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                b"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_hashLog, (int)comprParams.hashLog)\0"
-                    as *const u8 as *const core::ffi::c_char,
+                c"%s \n".as_ptr(),
+                c"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_hashLog, (int)comprParams.hashLog)".as_ptr(),
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 1184,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                11,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 11);
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"%s\0" as *const u8 as *const core::ffi::c_char,
-                ZSTD_getErrorName(err_13),
-            );
+            fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err_13));
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(11);
     }
@@ -2737,38 +2385,29 @@ unsafe fn FIO_createCResources(
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                b"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_searchLog, (int)comprParams.searchLog)\0"
-                    as *const u8 as *const core::ffi::c_char,
+                c"%s \n".as_ptr(),
+                c"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_searchLog, (int)comprParams.searchLog)".as_ptr(),
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 1185,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                11,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 11);
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"%s\0" as *const u8 as *const core::ffi::c_char,
-                ZSTD_getErrorName(err_14),
-            );
+            fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err_14));
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(11);
     }
@@ -2782,38 +2421,29 @@ unsafe fn FIO_createCResources(
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                b"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_minMatch, (int)comprParams.minMatch)\0"
-                    as *const u8 as *const core::ffi::c_char,
+                c"%s \n".as_ptr(),
+                c"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_minMatch, (int)comprParams.minMatch)".as_ptr(),
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 1186,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                11,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 11);
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"%s\0" as *const u8 as *const core::ffi::c_char,
-                ZSTD_getErrorName(err_15),
-            );
+            fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err_15));
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(11);
     }
@@ -2827,38 +2457,29 @@ unsafe fn FIO_createCResources(
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                b"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_targetLength, (int)comprParams.targetLength)\0"
-                    as *const u8 as *const core::ffi::c_char,
+                c"%s \n".as_ptr(),
+                c"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_targetLength, (int)comprParams.targetLength)".as_ptr(),
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 1187,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                11,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 11);
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"%s\0" as *const u8 as *const core::ffi::c_char,
-                ZSTD_getErrorName(err_16),
-            );
+            fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err_16));
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(11);
     }
@@ -2872,38 +2493,29 @@ unsafe fn FIO_createCResources(
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                b"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_strategy, (int)comprParams.strategy)\0"
-                    as *const u8 as *const core::ffi::c_char,
+                c"%s \n".as_ptr(),
+                c"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_strategy, (int)comprParams.strategy)".as_ptr(),
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 1188,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                11,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 11);
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"%s\0" as *const u8 as *const core::ffi::c_char,
-                ZSTD_getErrorName(err_17),
-            );
+            fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err_17));
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(11);
     }
@@ -2917,38 +2529,29 @@ unsafe fn FIO_createCResources(
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                b"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_experimentalParam5, (int)prefs->literalCompressionMode)\0"
-                    as *const u8 as *const core::ffi::c_char,
+                c"%s \n".as_ptr(),
+                c"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_experimentalParam5, (int)prefs->literalCompressionMode)".as_ptr(),
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 1189,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                11,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 11);
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"%s\0" as *const u8 as *const core::ffi::c_char,
-                ZSTD_getErrorName(err_18),
-            );
+            fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err_18));
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(11);
     }
@@ -2958,45 +2561,37 @@ unsafe fn FIO_createCResources(
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                b"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_experimentalParam8, 1)\0" as *const u8
-                    as *const core::ffi::c_char,
+                c"%s \n".as_ptr(),
+                c"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_experimentalParam8, 1)"
+                    .as_ptr(),
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 1190,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                11,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 11);
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"%s\0" as *const u8 as *const core::ffi::c_char,
-                ZSTD_getErrorName(err_19),
-            );
+            fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err_19));
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(11);
     }
     if g_display_prefs.displayLevel >= 5 {
         fprintf(
             stderr,
-            b"set nb workers = %u \n\0" as *const u8 as *const core::ffi::c_char,
+            c"set nb workers = %u \n".as_ptr(),
             (*prefs).nbWorkers,
         );
     }
@@ -3010,38 +2605,29 @@ unsafe fn FIO_createCResources(
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                b"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_nbWorkers, prefs->nbWorkers)\0"
-                    as *const u8 as *const core::ffi::c_char,
+                c"%s \n".as_ptr(),
+                c"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_nbWorkers, prefs->nbWorkers)".as_ptr(),
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 1194,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                11,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 11);
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"%s\0" as *const u8 as *const core::ffi::c_char,
-                ZSTD_getErrorName(err_20),
-            );
+            fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err_20));
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(11);
     }
@@ -3051,38 +2637,29 @@ unsafe fn FIO_createCResources(
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                b"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_jobSize, prefs->jobSize)\0" as *const u8
-                    as *const core::ffi::c_char,
+                c"%s \n".as_ptr(),
+                c"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_jobSize, prefs->jobSize)".as_ptr(),
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 1195,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                11,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 11);
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"%s\0" as *const u8 as *const core::ffi::c_char,
-                ZSTD_getErrorName(err_21),
-            );
+            fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err_21));
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(11);
     }
@@ -3090,7 +2667,7 @@ unsafe fn FIO_createCResources(
         if g_display_prefs.displayLevel >= 3 {
             fprintf(
                 stderr,
-                b"set overlapLog = %u \n\0" as *const u8 as *const core::ffi::c_char,
+                c"set overlapLog = %u \n".as_ptr(),
                 (*prefs).overlapLog,
             );
         }
@@ -3104,38 +2681,29 @@ unsafe fn FIO_createCResources(
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_overlapLog, prefs->overlapLog)\0"
-                        as *const u8 as *const core::ffi::c_char,
+                    c"%s \n".as_ptr(),
+                    c"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_overlapLog, prefs->overlapLog)".as_ptr(),
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c"zstd: ".as_ptr());
             }
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                    c"Error defined at %s, line %i : \n".as_ptr(),
+                    c"fileio.c".as_ptr(),
                     1198,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                    11,
-                );
+                fprintf(stderr, c"error %i : ".as_ptr(), 11);
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"%s\0" as *const u8 as *const core::ffi::c_char,
-                    ZSTD_getErrorName(err_22),
-                );
+                fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err_22));
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c" \n".as_ptr());
             }
             exit(11);
         }
@@ -3150,38 +2718,29 @@ unsafe fn FIO_createCResources(
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                b"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_experimentalParam1, prefs->rsyncable)\0"
-                    as *const u8 as *const core::ffi::c_char,
+                c"%s \n".as_ptr(),
+                c"ZSTD_CCtx_setParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_experimentalParam1, prefs->rsyncable)".as_ptr(),
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 1200,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                11,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 11);
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"%s\0" as *const u8 as *const core::ffi::c_char,
-                ZSTD_getErrorName(err_23),
-            );
+            fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err_23));
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(11);
     }
@@ -3192,38 +2751,29 @@ unsafe fn FIO_createCResources(
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"ZSTD_CCtx_refPrefix(ress.cctx, ress.dict.dictBuffer, ress.dict.dictBufferSize)\0"
-                        as *const u8 as *const core::ffi::c_char,
+                    c"%s \n".as_ptr(),
+                    c"ZSTD_CCtx_refPrefix(ress.cctx, ress.dict.dictBuffer, ress.dict.dictBufferSize)".as_ptr(),
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c"zstd: ".as_ptr());
             }
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                    c"Error defined at %s, line %i : \n".as_ptr(),
+                    c"fileio.c".as_ptr(),
                     1204,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                    11,
-                );
+                fprintf(stderr, c"error %i : ".as_ptr(), 11);
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"%s\0" as *const u8 as *const core::ffi::c_char,
-                    ZSTD_getErrorName(err_24),
-                );
+                fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err_24));
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c" \n".as_ptr());
             }
             exit(11);
         }
@@ -3238,38 +2788,29 @@ unsafe fn FIO_createCResources(
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"ZSTD_CCtx_loadDictionary_byReference(ress.cctx, ress.dict.dictBuffer, ress.dict.dictBufferSize)\0"
-                        as *const u8 as *const core::ffi::c_char,
+                    c"%s \n".as_ptr(),
+                    c"ZSTD_CCtx_loadDictionary_byReference(ress.cctx, ress.dict.dictBuffer, ress.dict.dictBufferSize)".as_ptr(),
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c"zstd: ".as_ptr());
             }
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                    c"Error defined at %s, line %i : \n".as_ptr(),
+                    c"fileio.c".as_ptr(),
                     1206,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                    11,
-                );
+                fprintf(stderr, c"error %i : ".as_ptr(), 11);
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"%s\0" as *const u8 as *const core::ffi::c_char,
-                    ZSTD_getErrorName(err_25),
-                );
+                fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err_25));
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c" \n".as_ptr());
             }
             exit(11);
         }
@@ -3308,9 +2849,7 @@ unsafe fn FIO_compressGzFrame(
         reserved: 0,
     };
     let mut writeJob = core::ptr::null_mut();
-    if compressionLevel > Z_BEST_COMPRESSION {
-        compressionLevel = Z_BEST_COMPRESSION;
-    }
+    compressionLevel = Ord::min(compressionLevel, Z_BEST_COMPRESSION);
     strm.zalloc = None;
     strm.zfree = None;
     strm.opaque = core::ptr::null_mut();
@@ -3322,37 +2861,33 @@ unsafe fn FIO_compressGzFrame(
         8,
         0,
         ZLIB_VERSION.as_ptr(),
-        ::core::mem::size_of::<z_stream>() as core::ffi::c_int,
+        size_of::<z_stream>() as core::ffi::c_int,
     );
     if ret != Z_OK {
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 1242,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                71,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 71);
         }
         if g_display_prefs.displayLevel >= 1 {
             fprintf(
                 stderr,
-                b"zstd: %s: deflateInit2 error %d \n\0" as *const u8 as *const core::ffi::c_char,
+                c"zstd: %s: deflateInit2 error %d \n".as_ptr(),
                 srcFileName,
                 ret,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(71);
     }
@@ -3381,33 +2916,29 @@ unsafe fn FIO_compressGzFrame(
         );
         if ret_0 != Z_OK {
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c"zstd: ".as_ptr());
             }
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                    c"Error defined at %s, line %i : \n".as_ptr(),
+                    c"fileio.c".as_ptr(),
                     1268,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                    72,
-                );
+                fprintf(stderr, c"error %i : ".as_ptr(), 72);
             }
             if g_display_prefs.displayLevel >= 1 {
                 fprintf(
                     stderr,
-                    b"zstd: %s: deflate error %d \n\0" as *const u8 as *const core::ffi::c_char,
+                    c"zstd: %s: deflate error %d \n".as_ptr(),
                     srcFileName,
                     ret_0,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c" \n".as_ptr());
             }
             exit(72);
         }
@@ -3434,7 +2965,7 @@ unsafe fn FIO_compressGzFrame(
                 g_displayClock = UTIL_getTime();
                 fprintf(
                     stderr,
-                    b"\rRead : %u MB ==> %.2f%% \0" as *const u8 as *const core::ffi::c_char,
+                    c"\rRead : %u MB ==> %.2f%% ".as_ptr(),
                     (inFileSize >> 20) as core::ffi::c_uint,
                     outFileSize as core::ffi::c_double / inFileSize as core::ffi::c_double * 100.0,
                 );
@@ -3456,7 +2987,7 @@ unsafe fn FIO_compressGzFrame(
             g_displayClock = UTIL_getTime();
             fprintf(
                 stderr,
-                b"\rRead : %u / %u MB ==> %.2f%% \0" as *const u8 as *const core::ffi::c_char,
+                c"\rRead : %u / %u MB ==> %.2f%% ".as_ptr(),
                 (inFileSize >> 20) as core::ffi::c_uint,
                 (srcFileSize >> 20) as core::ffi::c_uint,
                 outFileSize as core::ffi::c_double / inFileSize as core::ffi::c_double * 100.0,
@@ -3481,33 +3012,29 @@ unsafe fn FIO_compressGzFrame(
         }
         if ret_1 != Z_BUF_ERROR {
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c"zstd: ".as_ptr());
             }
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                    c"Error defined at %s, line %i : \n".as_ptr(),
+                    c"fileio.c".as_ptr(),
                     1301,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                    77,
-                );
+                fprintf(stderr, c"error %i : ".as_ptr(), 77);
             }
             if g_display_prefs.displayLevel >= 1 {
                 fprintf(
                     stderr,
-                    b"zstd: %s: deflate error %d \n\0" as *const u8 as *const core::ffi::c_char,
+                    c"zstd: %s: deflate error %d \n".as_ptr(),
                     srcFileName,
                     ret_1,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c" \n".as_ptr());
             }
             exit(77);
         }
@@ -3515,33 +3042,29 @@ unsafe fn FIO_compressGzFrame(
     let ret_2 = deflateEnd(&mut strm);
     if ret_2 != Z_OK {
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 1306,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                79,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 79);
         }
         if g_display_prefs.displayLevel >= 1 {
             fprintf(
                 stderr,
-                b"zstd: %s: deflateEnd error %d \n\0" as *const u8 as *const core::ffi::c_char,
+                c"zstd: %s: deflateEnd error %d \n".as_ptr(),
                 srcFileName,
                 ret_2,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(79);
     }
@@ -3585,12 +3108,7 @@ unsafe fn FIO_compressLzmaFrame(
     let mut action = LZMA_RUN;
     let mut ret = LZMA_OK;
     let mut writeJob = core::ptr::null_mut();
-    if compressionLevel < 0 {
-        compressionLevel = 0;
-    }
-    if compressionLevel > 9 {
-        compressionLevel = 9;
-    }
+    compressionLevel = compressionLevel.clamp(0, 9);
     if plain_lzma != 0 {
         let mut opt_lzma = lzma_options_lzma {
             dict_size: 0,
@@ -3620,66 +3138,57 @@ unsafe fn FIO_compressLzmaFrame(
         };
         if lzma_lzma_preset(&mut opt_lzma, compressionLevel as u32) != 0 {
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c"zstd: ".as_ptr());
             }
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                    c"Error defined at %s, line %i : \n".as_ptr(),
+                    c"fileio.c".as_ptr(),
                     1334,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                    81,
-                );
+                fprintf(stderr, c"error %i : ".as_ptr(), 81);
             }
             if g_display_prefs.displayLevel >= 1 {
                 fprintf(
                     stderr,
-                    b"zstd: %s: lzma_lzma_preset error\0" as *const u8 as *const core::ffi::c_char,
+                    c"zstd: %s: lzma_lzma_preset error".as_ptr(),
                     srcFileName,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c" \n".as_ptr());
             }
             exit(81);
         }
         ret = lzma_alone_encoder(&mut strm, &opt_lzma);
         if ret as core::ffi::c_uint != LZMA_OK as core::ffi::c_int as core::ffi::c_uint {
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c"zstd: ".as_ptr());
             }
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                    c"Error defined at %s, line %i : \n".as_ptr(),
+                    c"fileio.c".as_ptr(),
                     1337,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                    82,
-                );
+                fprintf(stderr, c"error %i : ".as_ptr(), 82);
             }
             if g_display_prefs.displayLevel >= 1 {
                 fprintf(
                     stderr,
-                    b"zstd: %s: lzma_alone_encoder error %d\0" as *const u8
-                        as *const core::ffi::c_char,
+                    c"zstd: %s: lzma_alone_encoder error %d".as_ptr(),
                     srcFileName,
                     ret as core::ffi::c_uint,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c" \n".as_ptr());
             }
             exit(82);
         }
@@ -3687,34 +3196,29 @@ unsafe fn FIO_compressLzmaFrame(
         ret = lzma_easy_encoder(&mut strm, compressionLevel as u32, LZMA_CHECK_CRC64);
         if ret as core::ffi::c_uint != LZMA_OK as core::ffi::c_int as core::ffi::c_uint {
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c"zstd: ".as_ptr());
             }
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                    c"Error defined at %s, line %i : \n".as_ptr(),
+                    c"fileio.c".as_ptr(),
                     1341,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                    83,
-                );
+                fprintf(stderr, c"error %i : ".as_ptr(), 83);
             }
             if g_display_prefs.displayLevel >= 1 {
                 fprintf(
                     stderr,
-                    b"zstd: %s: lzma_easy_encoder error %d\0" as *const u8
-                        as *const core::ffi::c_char,
+                    c"zstd: %s: lzma_easy_encoder error %d".as_ptr(),
                     srcFileName,
                     ret as core::ffi::c_uint,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c" \n".as_ptr());
             }
             exit(83);
         }
@@ -3741,34 +3245,29 @@ unsafe fn FIO_compressLzmaFrame(
             && ret as core::ffi::c_uint != LZMA_STREAM_END as core::ffi::c_int as core::ffi::c_uint
         {
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c"zstd: ".as_ptr());
             }
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                    c"Error defined at %s, line %i : \n".as_ptr(),
+                    c"fileio.c".as_ptr(),
                     1367,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                    84,
-                );
+                fprintf(stderr, c"error %i : ".as_ptr(), 84);
             }
             if g_display_prefs.displayLevel >= 1 {
                 fprintf(
                     stderr,
-                    b"zstd: %s: lzma_code encoding error %d\0" as *const u8
-                        as *const core::ffi::c_char,
+                    c"zstd: %s: lzma_code encoding error %d".as_ptr(),
                     srcFileName,
                     ret as core::ffi::c_uint,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c" \n".as_ptr());
             }
             exit(84);
         }
@@ -3795,7 +3294,7 @@ unsafe fn FIO_compressLzmaFrame(
                 g_displayClock = UTIL_getTime();
                 fprintf(
                     stderr,
-                    b"\rRead : %u MB ==> %.2f%%\0" as *const u8 as *const core::ffi::c_char,
+                    c"\rRead : %u MB ==> %.2f%%".as_ptr(),
                     (inFileSize >> 20) as core::ffi::c_uint,
                     outFileSize as core::ffi::c_double / inFileSize as core::ffi::c_double * 100.0,
                 );
@@ -3817,7 +3316,7 @@ unsafe fn FIO_compressLzmaFrame(
             g_displayClock = UTIL_getTime();
             fprintf(
                 stderr,
-                b"\rRead : %u / %u MB ==> %.2f%%\0" as *const u8 as *const core::ffi::c_char,
+                c"\rRead : %u / %u MB ==> %.2f%%".as_ptr(),
                 (inFileSize >> 20) as core::ffi::c_uint,
                 (srcFileSize >> 20) as core::ffi::c_uint,
                 outFileSize as core::ffi::c_double / inFileSize as core::ffi::c_double * 100.0,
@@ -3879,10 +3378,7 @@ unsafe fn FIO_compressZstdFrame(
     let adaptEveryMicro = REFRESH_RATE;
     let file_hrs = UTIL_makeHumanReadableSize(fileSize);
     if g_display_prefs.displayLevel >= 6 {
-        fprintf(
-            stderr,
-            b"compression using zstd format \n\0" as *const u8 as *const core::ffi::c_char,
-        );
+        fprintf(stderr, c"compression using zstd format \n".as_ptr());
     }
     if fileSize != UTIL_FILESIZE_UNKNOWN as u64 {
         pledgedSrcSize = fileSize;
@@ -3892,38 +3388,29 @@ unsafe fn FIO_compressZstdFrame(
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"ZSTD_CCtx_setPledgedSrcSize(ress.cctx, fileSize)\0" as *const u8
-                        as *const core::ffi::c_char,
+                    c"%s \n".as_ptr(),
+                    c"ZSTD_CCtx_setPledgedSrcSize(ress.cctx, fileSize)".as_ptr(),
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c"zstd: ".as_ptr());
             }
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                    c"Error defined at %s, line %i : \n".as_ptr(),
+                    c"fileio.c".as_ptr(),
                     1532,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                    11,
-                );
+                fprintf(stderr, c"error %i : ".as_ptr(), 11);
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"%s\0" as *const u8 as *const core::ffi::c_char,
-                    ZSTD_getErrorName(err),
-                );
+                fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err));
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c" \n".as_ptr());
             }
             exit(11);
         }
@@ -3938,38 +3425,29 @@ unsafe fn FIO_compressZstdFrame(
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"ZSTD_CCtx_setPledgedSrcSize(ress.cctx, prefs->streamSrcSize)\0" as *const u8
-                        as *const core::ffi::c_char,
+                    c"%s \n".as_ptr(),
+                    c"ZSTD_CCtx_setPledgedSrcSize(ress.cctx, prefs->streamSrcSize)".as_ptr(),
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c"zstd: ".as_ptr());
             }
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                    c"Error defined at %s, line %i : \n".as_ptr(),
+                    c"fileio.c".as_ptr(),
                     1536,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                    11,
-                );
+                fprintf(stderr, c"error %i : ".as_ptr(), 11);
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"%s\0" as *const u8 as *const core::ffi::c_char,
-                    ZSTD_getErrorName(err_0),
-                );
+                fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err_0));
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c" \n".as_ptr());
             }
             exit(11);
         }
@@ -3986,38 +3464,30 @@ unsafe fn FIO_compressZstdFrame(
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                b"ZSTD_CCtx_getParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_windowLog, &windowLog)\0" as *const u8
-                    as *const core::ffi::c_char,
+                c"%s \n".as_ptr(),
+                c"ZSTD_CCtx_getParameter(ress.cctx, ZSTD_cParameter::ZSTD_c_windowLog, &windowLog)"
+                    .as_ptr(),
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 1541,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                11,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 11);
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"%s\0" as *const u8 as *const core::ffi::c_char,
-                ZSTD_getErrorName(err_1),
-            );
+            fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err_1));
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(11);
     }
@@ -4031,15 +3501,15 @@ unsafe fn FIO_compressZstdFrame(
     }
     windowSize = UTIL_makeHumanReadableSize(
         (if 1
-            > (if (1) << windowLog < pledgedSrcSize as core::ffi::c_ulonglong {
-                (1) << windowLog
+            > (if 1 << windowLog < pledgedSrcSize as core::ffi::c_ulonglong {
+                1 << windowLog
             } else {
                 pledgedSrcSize as core::ffi::c_ulonglong
             })
         {
             1
-        } else if (1) << windowLog < pledgedSrcSize as core::ffi::c_ulonglong {
-            (1) << windowLog
+        } else if 1 << windowLog < pledgedSrcSize as core::ffi::c_ulonglong {
+            1 << windowLog
         } else {
             pledgedSrcSize as core::ffi::c_ulonglong
         }) as u64,
@@ -4047,8 +3517,7 @@ unsafe fn FIO_compressZstdFrame(
     if g_display_prefs.displayLevel >= 4 {
         fprintf(
             stderr,
-            b"Decompression will require %.*f%s of memory\n\0" as *const u8
-                as *const core::ffi::c_char,
+            c"Decompression will require %.*f%s of memory\n".as_ptr(),
             windowSize.precision,
             windowSize.value,
             windowSize.suffix,
@@ -4065,7 +3534,7 @@ unsafe fn FIO_compressZstdFrame(
         if g_display_prefs.displayLevel >= 6 {
             fprintf(
                 stderr,
-                b"fread %u bytes from source \n\0" as *const u8 as *const core::ffi::c_char,
+                c"fread %u bytes from source \n".as_ptr(),
                 inSize as core::ffi::c_uint,
             );
         }
@@ -4086,39 +3555,29 @@ unsafe fn FIO_compressZstdFrame(
                 if g_display_prefs.displayLevel >= 5 {
                     fprintf(
                         stderr,
-                        b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                        b"ZSTD_compressStream2(ress.cctx, &outBuff, &inBuff, directive)\0"
-                            as *const u8 as *const core::ffi::c_char,
+                        c"%s \n".as_ptr(),
+                        c"ZSTD_compressStream2(ress.cctx, &outBuff, &inBuff, directive)".as_ptr(),
                     );
                 }
                 if g_display_prefs.displayLevel >= 1 {
-                    fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                    fprintf(stderr, c"zstd: ".as_ptr());
                 }
                 if g_display_prefs.displayLevel >= 5 {
                     fprintf(
                         stderr,
-                        b"Error defined at %s, line %i : \n\0" as *const u8
-                            as *const core::ffi::c_char,
-                        b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                        c"Error defined at %s, line %i : \n".as_ptr(),
+                        c"fileio.c".as_ptr(),
                         1574,
                     );
                 }
                 if g_display_prefs.displayLevel >= 1 {
-                    fprintf(
-                        stderr,
-                        b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                        11,
-                    );
+                    fprintf(stderr, c"error %i : ".as_ptr(), 11);
                 }
                 if g_display_prefs.displayLevel >= 1 {
-                    fprintf(
-                        stderr,
-                        b"%s\0" as *const u8 as *const core::ffi::c_char,
-                        ZSTD_getErrorName(stillToFlush),
-                    );
+                    fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(stillToFlush));
                 }
                 if g_display_prefs.displayLevel >= 1 {
-                    fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                    fprintf(stderr, c" \n".as_ptr());
                 }
                 exit(11);
             }
@@ -4133,8 +3592,7 @@ unsafe fn FIO_compressZstdFrame(
             if g_display_prefs.displayLevel >= 6 {
                 fprintf(
                     stderr,
-                    b"ZSTD_compress_generic(end:%u) => input pos(%u)<=(%u)size ; output generated %u bytes \n\0"
-                        as *const u8 as *const core::ffi::c_char,
+                    c"ZSTD_compress_generic(end:%u) => input pos(%u)<=(%u)size ; output generated %u bytes \n".as_ptr(),
                     directive as core::ffi::c_uint,
                     inBuff.pos as core::ffi::c_uint,
                     inBuff.size as core::ffi::c_uint,
@@ -4158,9 +3616,7 @@ unsafe fn FIO_compressZstdFrame(
                         if g_display_prefs.displayLevel >= 6 {
                             fprintf(
                                 stderr,
-                                b"all buffers full : compression stopped => slow down \n\0"
-                                    as *const u8
-                                    as *const core::ffi::c_char,
+                                c"all buffers full : compression stopped => slow down \n".as_ptr(),
                             );
                         }
                         speedChange = slower;
@@ -4172,8 +3628,7 @@ unsafe fn FIO_compressZstdFrame(
                         if g_display_prefs.displayLevel >= 6 {
                             fprintf(
                                 stderr,
-                                b"compression faster than flush (%llu > %llu), and flushed was never slowed down by lack of production => slow down \n\0"
-                                    as *const u8 as *const core::ffi::c_char,
+                                c"compression faster than flush (%llu > %llu), and flushed was never slowed down by lack of production => slow down \n".as_ptr(),
                                 newlyProduced,
                                 newlyFlushed,
                             );
@@ -4184,20 +3639,15 @@ unsafe fn FIO_compressZstdFrame(
                 }
                 if zfp.currentJobID > lastJobID {
                     if g_display_prefs.displayLevel >= 6 {
-                        fprintf(
-                            stderr,
-                            b"compression level adaptation check \n\0" as *const u8
-                                as *const core::ffi::c_char,
-                        );
+                        fprintf(stderr, c"compression level adaptation check \n".as_ptr());
                     }
                     if zfp.currentJobID > ((*prefs).nbWorkers + 1) as core::ffi::c_uint {
-                        if inputBlocked <= 0 {
+                        if inputBlocked == 0 {
                             if g_display_prefs.displayLevel >= 6 {
                                 fprintf(
                                     stderr,
-                                    b"input is never blocked => input is slower than ingestion \n\0"
-                                        as *const u8
-                                        as *const core::ffi::c_char,
+                                    c"input is never blocked => input is slower than ingestion \n"
+                                        .as_ptr(),
                                 );
                             }
                             speedChange = slower;
@@ -4217,8 +3667,7 @@ unsafe fn FIO_compressZstdFrame(
                             if g_display_prefs.displayLevel >= 6 {
                                 fprintf(
                                     stderr,
-                                    b"input blocked %u/%u(%.2f) - ingested:%u vs %u:consumed - flushed:%u vs %u:produced \n\0"
-                                        as *const u8 as *const core::ffi::c_char,
+                                    c"input blocked %u/%u(%.2f) - ingested:%u vs %u:consumed - flushed:%u vs %u:produced \n".as_ptr(),
                                     inputBlocked,
                                     inputPresented,
                                     inputBlocked as core::ffi::c_double
@@ -4238,8 +3687,7 @@ unsafe fn FIO_compressZstdFrame(
                                 if g_display_prefs.displayLevel >= 6 {
                                     fprintf(
                                         stderr,
-                                        b"recommend faster as in(%llu) >= (%llu)comp(%llu) <= out(%llu) \n\0"
-                                            as *const u8 as *const core::ffi::c_char,
+                                        c"recommend faster as in(%llu) >= (%llu)comp(%llu) <= out(%llu) \n".as_ptr(),
                                         newlyIngested,
                                         newlyConsumed,
                                         newlyProduced_0,
@@ -4256,19 +3704,11 @@ unsafe fn FIO_compressZstdFrame(
                         == slower as core::ffi::c_int as core::ffi::c_uint
                     {
                         if g_display_prefs.displayLevel >= 6 {
-                            fprintf(
-                                stderr,
-                                b"slower speed , higher compression \n\0" as *const u8
-                                    as *const core::ffi::c_char,
-                            );
+                            fprintf(stderr, c"slower speed , higher compression \n".as_ptr());
                         }
                         compressionLevel += 1;
-                        if compressionLevel > ZSTD_maxCLevel() {
-                            compressionLevel = ZSTD_maxCLevel();
-                        }
-                        if compressionLevel > (*prefs).maxAdaptLevel {
-                            compressionLevel = (*prefs).maxAdaptLevel;
-                        }
+                        compressionLevel = Ord::min(compressionLevel, ZSTD_maxCLevel());
+                        compressionLevel = Ord::min(compressionLevel, (*prefs).maxAdaptLevel);
                         compressionLevel += (compressionLevel == 0) as core::ffi::c_int;
                         ZSTD_CCtx_setParameter(
                             ress.cctx,
@@ -4280,16 +3720,10 @@ unsafe fn FIO_compressZstdFrame(
                         == faster as core::ffi::c_int as core::ffi::c_uint
                     {
                         if g_display_prefs.displayLevel >= 6 {
-                            fprintf(
-                                stderr,
-                                b"faster speed , lighter compression \n\0" as *const u8
-                                    as *const core::ffi::c_char,
-                            );
+                            fprintf(stderr, c"faster speed , lighter compression \n".as_ptr());
                         }
                         compressionLevel -= 1;
-                        if compressionLevel < (*prefs).minAdaptLevel {
-                            compressionLevel = (*prefs).minAdaptLevel;
-                        }
+                        compressionLevel = Ord::max(compressionLevel, (*prefs).minAdaptLevel);
                         compressionLevel -= (compressionLevel == 0) as core::ffi::c_int;
                         ZSTD_CCtx_setParameter(
                             ress.cctx,
@@ -4328,11 +3762,7 @@ unsafe fn FIO_compressZstdFrame(
                             == FIO_ps_always as core::ffi::c_int as core::ffi::c_uint)
                     && g_display_prefs.displayLevel >= 1
                 {
-                    fprintf(
-                        stderr,
-                        b"\r%79s\r\0" as *const u8 as *const core::ffi::c_char,
-                        b"\0" as *const u8 as *const core::ffi::c_char,
-                    );
+                    fprintf(stderr, c"\r%79s\r".as_ptr(), c"".as_ptr());
                 }
                 if g_display_prefs.displayLevel >= 3 {
                     if g_display_prefs.progressSetting as core::ffi::c_uint
@@ -4344,8 +3774,7 @@ unsafe fn FIO_compressZstdFrame(
                     {
                         fprintf(
                                 stderr,
-                                b"(L%i) Buffered:%5.*f%s - Consumed:%5.*f%s - Compressed:%5.*f%s => %.2f%% \0"
-                                    as *const u8 as *const core::ffi::c_char,
+                                c"(L%i) Buffered:%5.*f%s - Consumed:%5.*f%s - Compressed:%5.*f%s => %.2f%% ".as_ptr(),
                                 compressionLevel,
                                 buffered_hrs.precision,
                                 buffered_hrs.value,
@@ -4374,8 +3803,7 @@ unsafe fn FIO_compressZstdFrame(
                             {
                                 fprintf(
                                     stderr,
-                                    b"Compress: %u/%u files. Current: ...%s \0" as *const u8
-                                        as *const core::ffi::c_char,
+                                    c"Compress: %u/%u files. Current: ...%s ".as_ptr(),
                                     (*fCtx).currFileIdx + 1,
                                     (*fCtx).nbFilesTotal,
                                     truncatedSrcFileName,
@@ -4390,8 +3818,7 @@ unsafe fn FIO_compressZstdFrame(
                         {
                             fprintf(
                                 stderr,
-                                b"Compress: %u/%u files. Current: %*s \0" as *const u8
-                                    as *const core::ffi::c_char,
+                                c"Compress: %u/%u files. Current: %*s ".as_ptr(),
                                 (*fCtx).currFileIdx + 1,
                                 (*fCtx).nbFilesTotal,
                                 (18 as size_t).wrapping_sub(srcFileNameSize) as core::ffi::c_int,
@@ -4408,7 +3835,7 @@ unsafe fn FIO_compressZstdFrame(
                     {
                         fprintf(
                             stderr,
-                            b"Read:%6.*f%4s \0" as *const u8 as *const core::ffi::c_char,
+                            c"Read:%6.*f%4s ".as_ptr(),
                             consumed_hrs.precision,
                             consumed_hrs.value,
                             consumed_hrs.suffix,
@@ -4424,7 +3851,7 @@ unsafe fn FIO_compressZstdFrame(
                     {
                         fprintf(
                             stderr,
-                            b"/%6.*f%4s\0" as *const u8 as *const core::ffi::c_char,
+                            c"/%6.*f%4s".as_ptr(),
                             file_hrs.precision,
                             file_hrs.value,
                             file_hrs.suffix,
@@ -4437,11 +3864,7 @@ unsafe fn FIO_compressZstdFrame(
                                 == FIO_ps_always as core::ffi::c_int as core::ffi::c_uint)
                         && g_display_prefs.displayLevel >= 1
                     {
-                        fprintf(
-                            stderr,
-                            b" ==> %2.f%%\0" as *const u8 as *const core::ffi::c_char,
-                            cShare,
-                        );
+                        fprintf(stderr, c" ==> %2.f%%".as_ptr(), cShare);
                     }
                 }
             }
@@ -4452,34 +3875,29 @@ unsafe fn FIO_compressZstdFrame(
     }
     if fileSize != UTIL_FILESIZE_UNKNOWN as u64 && *readsize != fileSize {
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 1727,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                27,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 27);
         }
         if g_display_prefs.displayLevel >= 1 {
             fprintf(
                 stderr,
-                b"Read error : Incomplete read : %llu / %llu B\0" as *const u8
-                    as *const core::ffi::c_char,
+                c"Read error : Incomplete read : %llu / %llu B".as_ptr(),
                 *readsize as core::ffi::c_ulonglong,
                 fileSize as core::ffi::c_ulonglong,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(27);
     }
@@ -4503,7 +3921,7 @@ unsafe fn FIO_compressFilename_internal(
     if g_display_prefs.displayLevel >= 5 {
         fprintf(
             stderr,
-            b"%s: %llu bytes \n\0" as *const u8 as *const core::ffi::c_char,
+            c"%s: %llu bytes \n".as_ptr(),
             srcFileName,
             fileSize as core::ffi::c_ulonglong,
         );
@@ -4532,37 +3950,32 @@ unsafe fn FIO_compressFilename_internal(
         }
         4 => {
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c"zstd: ".as_ptr());
             }
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                    c"Error defined at %s, line %i : \n".as_ptr(),
+                    c"fileio.c".as_ptr(),
                     1789,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                    20,
-                );
+                fprintf(stderr, c"error %i : ".as_ptr(), 20);
             }
             if g_display_prefs.displayLevel >= 1 {
                 fprintf(
                     stderr,
-                    b"zstd: %s: file cannot be compressed as lz4 (zstd compiled without ZSTD_LZ4COMPRESS) -- ignored \n\0"
-                        as *const u8 as *const core::ffi::c_char,
+                    c"zstd: %s: file cannot be compressed as lz4 (zstd compiled without ZSTD_LZ4COMPRESS) -- ignored \n".as_ptr(),
                     srcFileName,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c" \n".as_ptr());
             }
             exit(20);
         }
-        0 | _ => {
+        _ => {
             compressedfilesize = FIO_compressZstdFrame(
                 fCtx,
                 prefs,
@@ -4584,11 +3997,7 @@ unsafe fn FIO_compressFilename_internal(
                 == FIO_ps_always as core::ffi::c_int as core::ffi::c_uint)
         && g_display_prefs.displayLevel >= 1
     {
-        fprintf(
-            stderr,
-            b"\r%79s\r\0" as *const u8 as *const core::ffi::c_char,
-            b"\0" as *const u8 as *const core::ffi::c_char,
-        );
+        fprintf(stderr, c"\r%79s\r".as_ptr(), c"".as_ptr());
     }
     if FIO_shouldDisplayFileSummary(fCtx) != 0 {
         let hr_isize = UTIL_makeHumanReadableSize(readsize);
@@ -4601,8 +4010,7 @@ unsafe fn FIO_compressFilename_internal(
             {
                 fprintf(
                     stderr,
-                    b"%-20s :  (%6.*f%s => %6.*f%s, %s) \n\0" as *const u8
-                        as *const core::ffi::c_char,
+                    c"%-20s :  (%6.*f%s => %6.*f%s, %s) \n".as_ptr(),
                     srcFileName,
                     hr_isize.precision,
                     hr_isize.value,
@@ -4620,8 +4028,7 @@ unsafe fn FIO_compressFilename_internal(
         {
             fprintf(
                 stderr,
-                b"%-20s :%6.2f%%   (%6.*f%s => %6.*f%s, %s) \n\0" as *const u8
-                    as *const core::ffi::c_char,
+                c"%-20s :%6.2f%%   (%6.*f%s => %6.*f%s, %s) \n".as_ptr(),
                 srcFileName,
                 compressedfilesize as core::ffi::c_double / readsize as core::ffi::c_double * 100.0,
                 hr_isize.precision,
@@ -4641,8 +4048,7 @@ unsafe fn FIO_compressFilename_internal(
     if g_display_prefs.displayLevel >= 4 {
         fprintf(
             stderr,
-            b"%-20s : Completed in %.2f sec  (cpu load : %.0f%%)\n\0" as *const u8
-                as *const core::ffi::c_char,
+            c"%-20s : Completed in %.2f sec  (cpu load : %.0f%%)\n".as_ptr(),
             srcFileName,
             timeLength_s,
             cpuLoad_pct,
@@ -4677,8 +4083,7 @@ unsafe fn FIO_compressFilename_dstFile(
         if g_display_prefs.displayLevel >= 6 {
             fprintf(
                 stderr,
-                b"FIO_compressFilename_dstFile: opening dst: %s \n\0" as *const u8
-                    as *const core::ffi::c_char,
+                c"FIO_compressFilename_dstFile: opening dst: %s \n".as_ptr(),
                 dstFileName,
             );
         }
@@ -4712,8 +4117,7 @@ unsafe fn FIO_compressFilename_dstFile(
         if g_display_prefs.displayLevel >= 6 {
             fprintf(
                 stderr,
-                b"FIO_compressFilename_dstFile: closing dst: %s \n\0" as *const u8
-                    as *const core::ffi::c_char,
+                c"FIO_compressFilename_dstFile: closing dst: %s \n".as_ptr(),
                 dstFileName,
             );
         }
@@ -4765,7 +4169,7 @@ static compressedFileExtensions: [&CStr; 113] = [
     c".ba",
     c".br",
     c".bz2",
-    c".cab",
+    c".cac",
     c".cdx",
     c".chm",
     c".cr2",
@@ -4891,7 +4295,7 @@ unsafe fn FIO_compressFilename_srcFile(
     if g_display_prefs.displayLevel >= 6 {
         fprintf(
             stderr,
-            b"FIO_compressFilename_srcFile: %s \n\0" as *const u8 as *const core::ffi::c_char,
+            c"FIO_compressFilename_srcFile: %s \n".as_ptr(),
             srcFileName,
         );
     }
@@ -4901,8 +4305,7 @@ unsafe fn FIO_compressFilename_srcFile(
             if g_display_prefs.displayLevel >= 1 {
                 fprintf(
                     stderr,
-                    b"zstd: %s is a directory -- ignored \n\0" as *const u8
-                        as *const core::ffi::c_char,
+                    c"zstd: %s is a directory -- ignored \n".as_ptr(),
                     srcFileName,
                 );
             }
@@ -4919,8 +4322,7 @@ unsafe fn FIO_compressFilename_srcFile(
             if g_display_prefs.displayLevel >= 1 {
                 fprintf(
                     stderr,
-                    b"zstd: cannot use %s as an input file and dictionary \n\0" as *const u8
-                        as *const core::ffi::c_char,
+                    c"zstd: cannot use %s as an input file and dictionary \n".as_ptr(),
                     srcFileName,
                 );
             }
@@ -4933,7 +4335,7 @@ unsafe fn FIO_compressFilename_srcFile(
         if g_display_prefs.displayLevel >= 4 {
             fprintf(
                 stderr,
-                b"File is already compressed : %s \n\0" as *const u8 as *const core::ffi::c_char,
+                c"File is already compressed : %s \n".as_ptr(),
                 srcFileName,
             );
         }
@@ -4968,22 +4370,18 @@ unsafe fn FIO_compressFilename_srcFile(
         clearHandler();
         if FIO_removeFile(srcFileName) != 0 {
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c"zstd: ".as_ptr());
             }
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                    c"Error defined at %s, line %i : \n".as_ptr(),
+                    c"fileio.c".as_ptr(),
                     2100,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                    1,
-                );
+                fprintf(stderr, c"error %i : ".as_ptr(), 1);
             }
             if g_display_prefs.displayLevel >= 1 {
                 eprintln!(
@@ -5014,114 +4412,102 @@ pub unsafe fn FIO_displayCompressionParameters(prefs: *const FIO_prefs_t) {
     assert!(g_display_prefs.displayLevel >= 4);
     fprintf(
         stderr,
-        b"--format=%s\0" as *const u8 as *const core::ffi::c_char,
+        c"--format=%s".as_ptr(),
         formatOptions[(*prefs).compressionType as usize].as_ptr(),
     );
     fprintf(
         stderr,
-        b"%s\0" as *const u8 as *const core::ffi::c_char,
+        c"%s".as_ptr(),
         sparseOptions[(*prefs).sparseFileSupport as usize].as_ptr(),
     );
     fprintf(
         stderr,
-        b"%s\0" as *const u8 as *const core::ffi::c_char,
+        c"%s".as_ptr(),
         if (*prefs).dictIDFlag != 0 {
-            b"\0" as *const u8 as *const core::ffi::c_char
+            c"".as_ptr()
         } else {
-            b" --no-dictID\0" as *const u8 as *const core::ffi::c_char
+            c" --no-dictID".as_ptr()
         },
     );
     fprintf(
         stderr,
-        b"%s\0" as *const u8 as *const core::ffi::c_char,
+        c"%s".as_ptr(),
         checkSumOptions[(*prefs).checksumFlag as usize].as_ptr(),
     );
-    fprintf(
-        stderr,
-        b" --jobsize=%d\0" as *const u8 as *const core::ffi::c_char,
-        (*prefs).jobSize,
-    );
+    fprintf(stderr, c" --jobsize=%d".as_ptr(), (*prefs).jobSize);
     if (*prefs).adaptiveMode != 0 {
         fprintf(
             stderr,
-            b" --adapt=min=%d,max=%d\0" as *const u8 as *const core::ffi::c_char,
+            c" --adapt=min=%d,max=%d".as_ptr(),
             (*prefs).minAdaptLevel,
             (*prefs).maxAdaptLevel,
         );
     }
     fprintf(
         stderr,
-        b"%s\0" as *const u8 as *const core::ffi::c_char,
+        c"%s".as_ptr(),
         rowMatchFinderOptions[(*prefs).useRowMatchFinder as usize].as_ptr(),
     );
     fprintf(
         stderr,
-        b"%s\0" as *const u8 as *const core::ffi::c_char,
+        c"%s".as_ptr(),
         if (*prefs).rsyncable != 0 {
-            b" --rsyncable\0" as *const u8 as *const core::ffi::c_char
+            c" --rsyncable".as_ptr()
         } else {
-            b"\0" as *const u8 as *const core::ffi::c_char
+            c"".as_ptr()
         },
     );
     if (*prefs).streamSrcSize != 0 {
         fprintf(
             stderr,
-            b" --stream-size=%u\0" as *const u8 as *const core::ffi::c_char,
+            c" --stream-size=%u".as_ptr(),
             (*prefs).streamSrcSize as core::ffi::c_uint,
         );
     }
     if (*prefs).srcSizeHint != 0 {
-        fprintf(
-            stderr,
-            b" --size-hint=%d\0" as *const u8 as *const core::ffi::c_char,
-            (*prefs).srcSizeHint,
-        );
+        fprintf(stderr, c" --size-hint=%d".as_ptr(), (*prefs).srcSizeHint);
     }
     if (*prefs).targetCBlockSize != 0 {
         fprintf(
             stderr,
-            b" --target-compressed-block-size=%u\0" as *const u8 as *const core::ffi::c_char,
+            c" --target-compressed-block-size=%u".as_ptr(),
             (*prefs).targetCBlockSize as core::ffi::c_uint,
         );
     }
     fprintf(
         stderr,
-        b"%s\0" as *const u8 as *const core::ffi::c_char,
+        c"%s".as_ptr(),
         compressLiteralsOptions[(*prefs).literalCompressionMode.to_i32() as usize].as_ptr(),
     );
     fprintf(
         stderr,
-        b" --memory=%u\0" as *const u8 as *const core::ffi::c_char,
+        c" --memory=%u".as_ptr(),
         if (*prefs).memLimit != 0 {
             (*prefs).memLimit
         } else {
-            (128 * ((1) << 20)) as core::ffi::c_uint
+            (128 * (1 << 20)) as core::ffi::c_uint
         },
     );
+    fprintf(stderr, c" --threads=%d".as_ptr(), (*prefs).nbWorkers);
     fprintf(
         stderr,
-        b" --threads=%d\0" as *const u8 as *const core::ffi::c_char,
-        (*prefs).nbWorkers,
-    );
-    fprintf(
-        stderr,
-        b"%s\0" as *const u8 as *const core::ffi::c_char,
+        c"%s".as_ptr(),
         if (*prefs).excludeCompressedFiles != 0 {
-            b" --exclude-compressed\0" as *const u8 as *const core::ffi::c_char
+            c" --exclude-compressed".as_ptr()
         } else {
-            b"\0" as *const u8 as *const core::ffi::c_char
+            c"".as_ptr()
         },
     );
     fprintf(
         stderr,
-        b" --%scontent-size\0" as *const u8 as *const core::ffi::c_char,
+        c" --%scontent-size".as_ptr(),
         if (*prefs).contentSize != 0 {
-            b"\0" as *const u8 as *const core::ffi::c_char
+            c"".as_ptr()
         } else {
-            b"no-\0" as *const u8 as *const core::ffi::c_char
+            c"no-".as_ptr()
         },
     );
-    fprintf(stderr, b"\n\0" as *const u8 as *const core::ffi::c_char);
+    fprintf(stderr, c"\n".as_ptr());
 }
 pub unsafe fn FIO_compressFilename(
     fCtx: *mut FIO_ctx_t,
@@ -5174,22 +4560,18 @@ unsafe fn FIO_determineCompressedName(
         dstFileNameBuffer = malloc(dfnbCapacity) as *mut core::ffi::c_char;
         if dstFileNameBuffer.is_null() {
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c"zstd: ".as_ptr());
             }
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                    c"Error defined at %s, line %i : \n".as_ptr(),
+                    c"fileio.c".as_ptr(),
                     2194,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                    30,
-                );
+                fprintf(stderr, c"error %i : ".as_ptr(), 30);
             }
             if g_display_prefs.displayLevel >= 1 {
                 eprintln!("zstd: {}", io::Error::last_os_error());
@@ -5397,8 +4779,7 @@ pub unsafe fn FIO_compressMultipleFilenames(
             {
                 fprintf(
                     stderr,
-                    b"%3d files compressed : (%6.*f%4s => %6.*f%4s)\n\0" as *const u8
-                        as *const core::ffi::c_char,
+                    c"%3d files compressed : (%6.*f%4s => %6.*f%4s)\n".as_ptr(),
                     (*fCtx).nbFilesProcessed,
                     hr_isize.precision,
                     hr_isize.value,
@@ -5414,8 +4795,7 @@ pub unsafe fn FIO_compressMultipleFilenames(
         {
             fprintf(
                 stderr,
-                b"%3d files compressed : %.2f%% (%6.*f%4s => %6.*f%4s)\n\0" as *const u8
-                    as *const core::ffi::c_char,
+                c"%3d files compressed : %.2f%% (%6.*f%4s => %6.*f%4s)\n".as_ptr(),
                 (*fCtx).nbFilesProcessed,
                 (*fCtx).totalBytesOutput as core::ffi::c_double
                     / (*fCtx).totalBytesInput as core::ffi::c_double
@@ -5437,9 +4817,8 @@ unsafe fn FIO_createDResources(
     prefs: *mut FIO_prefs_t,
     dictFileName: *const core::ffi::c_char,
 ) -> dRess_t {
-    let mut useMMap = ((*prefs).mmapDict == ZSTD_ParamSwitch_e::ZSTD_ps_enable) as core::ffi::c_int;
-    let forceNoUseMMap =
-        ((*prefs).mmapDict == ZSTD_ParamSwitch_e::ZSTD_ps_disable) as core::ffi::c_int;
+    let mut useMMap = ((*prefs).mmapDict == ParamSwitch::Enable) as core::ffi::c_int;
+    let forceNoUseMMap = ((*prefs).mmapDict == ParamSwitch::Disable) as core::ffi::c_int;
     let mut statbuf = stat {
         st_dev: 0,
         st_ino: 0,
@@ -5479,12 +4858,12 @@ unsafe fn FIO_createDResources(
     ptr::write_bytes(
         &mut statbuf as *mut stat_t as *mut u8,
         0,
-        ::core::mem::size_of::<stat_t>(),
+        size_of::<stat_t>(),
     );
     ptr::write_bytes(
         &mut ress as *mut dRess_t as *mut u8,
         0,
-        ::core::mem::size_of::<dRess_t>(),
+        size_of::<dRess_t>(),
     );
     FIO_getDictFileStat(dictFileName, &mut statbuf);
     if (*prefs).patchFromMode != 0 {
@@ -5495,22 +4874,18 @@ unsafe fn FIO_createDResources(
     ress.dctx = ZSTD_createDStream();
     if (ress.dctx).is_null() {
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 2351,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                60,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 60);
         }
         if g_display_prefs.displayLevel >= 1 {
             eprintln!(
@@ -5526,38 +4901,29 @@ unsafe fn FIO_createDResources(
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                b"ZSTD_DCtx_setMaxWindowSize(ress.dctx, prefs->memLimit)\0" as *const u8
-                    as *const core::ffi::c_char,
+                c"%s \n".as_ptr(),
+                c"ZSTD_DCtx_setMaxWindowSize(ress.dctx, prefs->memLimit)".as_ptr(),
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 2352,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                11,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 11);
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"%s\0" as *const u8 as *const core::ffi::c_char,
-                ZSTD_getErrorName(err),
-            );
+            fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err));
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(11);
     }
@@ -5571,38 +4937,29 @@ unsafe fn FIO_createDResources(
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                b"ZSTD_DCtx_setParameter(ress.dctx, ZSTD_d_experimentalParam3, !prefs->checksumFlag)\0"
-                    as *const u8 as *const core::ffi::c_char,
+                c"%s \n".as_ptr(),
+                c"ZSTD_DCtx_setParameter(ress.dctx, ZSTD_d_experimentalParam3, !prefs->checksumFlag)".as_ptr(),
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 2353,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                11,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 11);
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"%s\0" as *const u8 as *const core::ffi::c_char,
-                ZSTD_getErrorName(err_0),
-            );
+            fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err_0));
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(11);
     }
@@ -5624,38 +4981,30 @@ unsafe fn FIO_createDResources(
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                b"ZSTD_DCtx_reset(ress.dctx, ZSTD_ResetDirective::ZSTD_reset_session_only)\0"
-                    as *const u8 as *const core::ffi::c_char,
+                c"%s \n".as_ptr(),
+                c"ZSTD_DCtx_reset(ress.dctx, ZSTD_ResetDirective::ZSTD_reset_session_only)"
+                    .as_ptr(),
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 2360,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                11,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 11);
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"%s\0" as *const u8 as *const core::ffi::c_char,
-                ZSTD_getErrorName(err_1),
-            );
+            fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err_1));
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(11);
     }
@@ -5666,38 +5015,29 @@ unsafe fn FIO_createDResources(
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"ZSTD_DCtx_refPrefix(ress.dctx, ress.dict.dictBuffer, ress.dict.dictBufferSize)\0"
-                        as *const u8 as *const core::ffi::c_char,
+                    c"%s \n".as_ptr(),
+                    c"ZSTD_DCtx_refPrefix(ress.dctx, ress.dict.dictBuffer, ress.dict.dictBufferSize)".as_ptr(),
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c"zstd: ".as_ptr());
             }
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                    c"Error defined at %s, line %i : \n".as_ptr(),
+                    c"fileio.c".as_ptr(),
                     2363,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                    11,
-                );
+                fprintf(stderr, c"error %i : ".as_ptr(), 11);
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"%s\0" as *const u8 as *const core::ffi::c_char,
-                    ZSTD_getErrorName(err_2),
-                );
+                fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err_2));
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c" \n".as_ptr());
             }
             exit(11);
         }
@@ -5712,38 +5052,29 @@ unsafe fn FIO_createDResources(
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"ZSTD_DCtx_loadDictionary_byReference(ress.dctx, ress.dict.dictBuffer, ress.dict.dictBufferSize)\0"
-                        as *const u8 as *const core::ffi::c_char,
+                    c"%s \n".as_ptr(),
+                    c"ZSTD_DCtx_loadDictionary_byReference(ress.dctx, ress.dict.dictBuffer, ress.dict.dictBufferSize)".as_ptr(),
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c"zstd: ".as_ptr());
             }
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                    c"Error defined at %s, line %i : \n".as_ptr(),
+                    c"fileio.c".as_ptr(),
                     2365,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                    11,
-                );
+                fprintf(stderr, c"error %i : ".as_ptr(), 11);
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"%s\0" as *const u8 as *const core::ffi::c_char,
-                    ZSTD_getErrorName(err_3),
-                );
+                fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err_3));
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c" \n".as_ptr());
             }
             exit(11);
         }
@@ -5760,37 +5091,29 @@ unsafe fn FIO_freeDResources(mut ress: dRess_t) {
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-                b"ZSTD_freeDStream(ress.dctx)\0" as *const u8 as *const core::ffi::c_char,
+                c"%s \n".as_ptr(),
+                c"ZSTD_freeDStream(ress.dctx)".as_ptr(),
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio.c".as_ptr(),
                 2377,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                11,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 11);
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"%s\0" as *const u8 as *const core::ffi::c_char,
-                ZSTD_getErrorName(err),
-            );
+            fprintf(stderr, c"%s".as_ptr(), ZSTD_getErrorName(err));
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(11);
     }
@@ -5798,14 +5121,14 @@ unsafe fn FIO_freeDResources(mut ress: dRess_t) {
     AIO_ReadPool_free(ress.readCtx);
 }
 unsafe fn FIO_passThrough(ress: *mut dRess_t) -> core::ffi::c_int {
-    let blockSize = if (if ((64 * ((1) << 10)) as size_t) < ZSTD_DStreamInSize() {
-        (64 * ((1) << 10)) as size_t
+    let blockSize = if (if ((64 * (1 << 10)) as size_t) < ZSTD_DStreamInSize() {
+        (64 * (1 << 10)) as size_t
     } else {
         ZSTD_DStreamInSize()
     }) < ZSTD_DStreamOutSize()
     {
-        if ((64 * ((1) << 10)) as size_t) < ZSTD_DStreamInSize() {
-            (64 * ((1) << 10)) as size_t
+        if ((64 * (1 << 10)) as size_t) < ZSTD_DStreamInSize() {
+            (64 * (1 << 10)) as size_t
         } else {
             ZSTD_DStreamInSize()
         }
@@ -5833,7 +5156,7 @@ unsafe fn FIO_passThrough(ress: *mut dRess_t) -> core::ffi::c_int {
         AIO_ReadPool_consumeBytes((*ress).readCtx, writeSize);
         AIO_ReadPool_fillBuffer((*ress).readCtx, blockSize);
     }
-    assert!((*(*ress).readCtx).reachedEof != 0);
+    assert_ne!((*(*ress).readCtx).reachedEof, 0);
     AIO_WritePool_releaseIoJob(writeJob);
     AIO_WritePool_sparseWriteEnd((*ress).writeCtx);
     0
@@ -5874,30 +5197,22 @@ unsafe fn FIO_zstdErrorHelp(
         if g_display_prefs.displayLevel >= 1 {
             fprintf(
                 stderr,
-                b"%s : Window size larger than maximum : %llu > %u \n\0" as *const u8
-                    as *const core::ffi::c_char,
+                c"%s : Window size larger than maximum : %llu > %u \n".as_ptr(),
                 srcFileName,
                 windowSize,
                 (*prefs).memLimit,
             );
         }
-        if windowLog
-            <= (if ::core::mem::size_of::<size_t>() == 4 {
-                ZSTD_WINDOWLOG_MAX_32
-            } else {
-                ZSTD_WINDOWLOG_MAX_64
-            }) as core::ffi::c_uint
-        {
+        if windowLog <= ZSTD_WINDOWLOG_MAX as core::ffi::c_uint {
             let windowMB = (windowSize >> 20).wrapping_add(
-                (windowSize & (((1) << 20) - 1) as core::ffi::c_ulonglong != 0) as core::ffi::c_int
+                (windowSize & ((1 << 20) - 1) as core::ffi::c_ulonglong != 0) as core::ffi::c_int
                     as core::ffi::c_ulonglong,
             ) as core::ffi::c_uint;
             assert!(windowSize < ((1 as core::ffi::c_ulonglong) << 52) as core::ffi::c_ulonglong);
             if g_display_prefs.displayLevel >= 1 {
                 fprintf(
                     stderr,
-                    b"%s : Use --long=%u or --memory=%uMB \n\0" as *const u8
-                        as *const core::ffi::c_char,
+                    c"%s : Use --long=%u or --memory=%uMB \n".as_ptr(),
                     srcFileName,
                     windowLog,
                     windowMB,
@@ -5909,14 +5224,9 @@ unsafe fn FIO_zstdErrorHelp(
     if g_display_prefs.displayLevel >= 1 {
         fprintf(
             stderr,
-            b"%s : Window log larger than ZSTD_WINDOWLOG_MAX=%u; not supported \n\0" as *const u8
-                as *const core::ffi::c_char,
+            c"%s : Window log larger than ZSTD_WINDOWLOG_MAX=%u; not supported \n".as_ptr(),
             srcFileName,
-            if ::core::mem::size_of::<size_t>() == 4 {
-                30
-            } else {
-                31
-            },
+            ZSTD_WINDOWLOG_MAX,
         );
     }
 }
@@ -5951,7 +5261,7 @@ unsafe fn FIO_decompressZstdFrame(
             if g_display_prefs.displayLevel >= 1 {
                 fprintf(
                     stderr,
-                    b"%s : Decoding error (36) : %s \n\0" as *const u8 as *const core::ffi::c_char,
+                    c"%s : Decoding error (36) : %s \n".as_ptr(),
                     srcFileName,
                     ZSTD_getErrorName(readSizeHint),
                 );
@@ -5978,8 +5288,7 @@ unsafe fn FIO_decompressZstdFrame(
                 g_displayClock = UTIL_getTime();
                 fprintf(
                     stderr,
-                    b"\rDecompress: %2u/%2u files. Current: %s : %.*f%s...    \0" as *const u8
-                        as *const core::ffi::c_char,
+                    c"\rDecompress: %2u/%2u files. Current: %s : %.*f%s...    ".as_ptr(),
                     (*fCtx).currFileIdx + 1,
                     (*fCtx).nbFilesTotal,
                     srcFName20,
@@ -6005,7 +5314,7 @@ unsafe fn FIO_decompressZstdFrame(
             g_displayClock = UTIL_getTime();
             fprintf(
                 stderr,
-                b"\r%-20.20s : %.*f%s...     \0" as *const u8 as *const core::ffi::c_char,
+                c"\r%-20.20s : %.*f%s...     ".as_ptr(),
                 srcFName20,
                 hrs.precision,
                 hrs.value,
@@ -6030,8 +5339,7 @@ unsafe fn FIO_decompressZstdFrame(
                 if g_display_prefs.displayLevel >= 1 {
                     fprintf(
                         stderr,
-                        b"%s : Read error (39) : premature end \n\0" as *const u8
-                            as *const core::ffi::c_char,
+                        c"%s : Read error (39) : premature end \n".as_ptr(),
                         srcFileName,
                     );
                 }
@@ -6077,7 +5385,7 @@ unsafe fn FIO_decompressGzFrame(
         &mut strm,
         15 + 16,
         ZLIB_VERSION.as_ptr(),
-        ::core::mem::size_of::<z_stream>() as core::ffi::c_int,
+        size_of::<z_stream>() as core::ffi::c_int,
     ) != Z_OK
     {
         return FIO_ERROR_FRAME_DECODING as core::ffi::c_ulonglong;
@@ -6102,7 +5410,7 @@ unsafe fn FIO_decompressGzFrame(
             if g_display_prefs.displayLevel >= 1 {
                 fprintf(
                     stderr,
-                    b"zstd: %s: premature gz end \n\0" as *const u8 as *const core::ffi::c_char,
+                    c"zstd: %s: premature gz end \n".as_ptr(),
                     srcFileName,
                 );
             }
@@ -6112,7 +5420,7 @@ unsafe fn FIO_decompressGzFrame(
             if g_display_prefs.displayLevel >= 1 {
                 fprintf(
                     stderr,
-                    b"zstd: %s: inflate error %d \n\0" as *const u8 as *const core::ffi::c_char,
+                    c"zstd: %s: inflate error %d \n".as_ptr(),
                     srcFileName,
                     ret,
                 );
@@ -6141,7 +5449,7 @@ unsafe fn FIO_decompressGzFrame(
         if g_display_prefs.displayLevel >= 1 {
             fprintf(
                 stderr,
-                b"zstd: %s: inflateEnd error \n\0" as *const u8 as *const core::ffi::c_char,
+                c"zstd: %s: inflateEnd error \n".as_ptr(),
                 srcFileName,
             );
         }
@@ -6198,11 +5506,11 @@ unsafe fn FIO_decompressLzmaFrame(
         if g_display_prefs.displayLevel >= 1 {
             fprintf(
                 stderr,
-                b"zstd: %s: %s error %d \n\0" as *const u8 as *const core::ffi::c_char,
+                c"zstd: %s: %s error %d \n".as_ptr(),
                 if plain_lzma != 0 {
-                    b"lzma_alone_decoder\0" as *const u8 as *const core::ffi::c_char
+                    c"lzma_alone_decoder".as_ptr()
                 } else {
-                    b"lzma_stream_decoder\0" as *const u8 as *const core::ffi::c_char
+                    c"lzma_stream_decoder".as_ptr()
                 },
                 srcFileName,
                 initRet as core::ffi::c_uint,
@@ -6230,7 +5538,7 @@ unsafe fn FIO_decompressLzmaFrame(
             if g_display_prefs.displayLevel >= 1 {
                 fprintf(
                     stderr,
-                    b"zstd: %s: premature lzma end \n\0" as *const u8 as *const core::ffi::c_char,
+                    c"zstd: %s: premature lzma end \n".as_ptr(),
                     srcFileName,
                 );
             }
@@ -6242,8 +5550,7 @@ unsafe fn FIO_decompressLzmaFrame(
             if g_display_prefs.displayLevel >= 1 {
                 fprintf(
                     stderr,
-                    b"zstd: %s: lzma_code decoding error %d \n\0" as *const u8
-                        as *const core::ffi::c_char,
+                    c"zstd: %s: lzma_code decoding error %d \n".as_ptr(),
                     srcFileName,
                     ret as core::ffi::c_uint,
                 );
@@ -6303,8 +5610,7 @@ unsafe fn FIO_decompressFrames(
                 if g_display_prefs.displayLevel >= 1 {
                     fprintf(
                         stderr,
-                        b"zstd: %s: unexpected end of file \n\0" as *const u8
-                            as *const core::ffi::c_char,
+                        c"zstd: %s: unexpected end of file \n".as_ptr(),
                         srcFileName,
                     );
                 }
@@ -6318,11 +5624,7 @@ unsafe fn FIO_decompressFrames(
                     return FIO_passThrough(&mut ress);
                 }
                 if g_display_prefs.displayLevel >= 1 {
-                    fprintf(
-                        stderr,
-                        b"zstd: %s: unknown header \n\0" as *const u8 as *const core::ffi::c_char,
-                        srcFileName,
-                    );
+                    fprintf(stderr, c"zstd: %s: unknown header \n".as_ptr(), srcFileName);
                 }
                 return 1;
             }
@@ -6364,8 +5666,7 @@ unsafe fn FIO_decompressFrames(
                 if g_display_prefs.displayLevel >= 1 {
                     fprintf(
                         stderr,
-                        b"zstd: %s: lz4 file cannot be uncompressed (zstd compiled without HAVE_LZ4) -- ignored \n\0"
-                            as *const u8 as *const core::ffi::c_char,
+                        c"zstd: %s: lz4 file cannot be uncompressed (zstd compiled without HAVE_LZ4) -- ignored \n".as_ptr(),
                         srcFileName,
                     );
                 }
@@ -6376,8 +5677,7 @@ unsafe fn FIO_decompressFrames(
                 if g_display_prefs.displayLevel >= 1 {
                     fprintf(
                         stderr,
-                        b"zstd: %s: unsupported format \n\0" as *const u8
-                            as *const core::ffi::c_char,
+                        c"zstd: %s: unsupported format \n".as_ptr(),
                         srcFileName,
                     );
                 }
@@ -6393,11 +5693,7 @@ unsafe fn FIO_decompressFrames(
                 == FIO_ps_always as core::ffi::c_int as core::ffi::c_uint)
         && g_display_prefs.displayLevel >= 1
     {
-        fprintf(
-            stderr,
-            b"\r%79s\r\0" as *const u8 as *const core::ffi::c_char,
-            b"\0" as *const u8 as *const core::ffi::c_char,
-        );
+        fprintf(stderr, c"\r%79s\r".as_ptr(), c"".as_ptr());
     }
     if FIO_shouldDisplayFileSummary(fCtx) != 0
         && (g_display_prefs.displayLevel >= 2
@@ -6407,7 +5703,7 @@ unsafe fn FIO_decompressFrames(
     {
         fprintf(
             stderr,
-            b"%-20s: %llu bytes \n\0" as *const u8 as *const core::ffi::c_char,
+            c"%-20s: %llu bytes \n".as_ptr(),
             srcFileName,
             filesize,
         );
@@ -6510,7 +5806,7 @@ unsafe fn FIO_decompressSrcFile(
         if g_display_prefs.displayLevel >= 1 {
             fprintf(
                 stderr,
-                b"zstd: %s is a directory -- ignored \n\0" as *const u8 as *const core::ffi::c_char,
+                c"zstd: %s is a directory -- ignored \n".as_ptr(),
                 srcFileName,
             );
         }
@@ -6589,7 +5885,7 @@ unsafe fn FIO_determineDstName(
     static mut dstFileNameBuffer: *mut core::ffi::c_char = core::ptr::null_mut();
     let mut dstFileNameEndPos: size_t = 0;
     let mut outDirFilename = core::ptr::null_mut();
-    let mut dstSuffix = b"\0" as *const u8 as *const core::ffi::c_char;
+    let mut dstSuffix = c"".as_ptr();
     let mut dstSuffixLen = 0;
     let mut sfnSize = strlen(srcFileName);
     let mut srcSuffixLen: size_t = 0;
@@ -6601,8 +5897,7 @@ unsafe fn FIO_determineDstName(
         if g_display_prefs.displayLevel >= 1 {
             fprintf(
                 stderr,
-                b"zstd: %s: unknown suffix (%s expected). Can't derive the output file name. Specify it with -o dstFileName. Ignoring.\n\0"
-                    as *const u8 as *const core::ffi::c_char,
+                c"zstd: %s: unknown suffix (%s expected). Can't derive the output file name. Specify it with -o dstFileName. Ignoring.\n".as_ptr(),
                 srcFileName,
                 suffixListStr.as_ptr(),
             );
@@ -6617,8 +5912,7 @@ unsafe fn FIO_determineDstName(
         if g_display_prefs.displayLevel >= 1 {
             fprintf(
                 stderr,
-                b"zstd: %s: unknown suffix (%s expected). Can't derive the output file name. Specify it with -o dstFileName. Ignoring.\n\0"
-                    as *const u8 as *const core::ffi::c_char,
+                c"zstd: %s: unknown suffix (%s expected). Can't derive the output file name. Specify it with -o dstFileName. Ignoring.\n".as_ptr(),
                 srcFileName,
                 suffixListStr.as_ptr(),
             );
@@ -6626,7 +5920,7 @@ unsafe fn FIO_determineDstName(
         return core::ptr::null();
     }
     if *matchedSuffix.unwrap().as_ptr().offset(1) as core::ffi::c_int == 't' as i32 {
-        dstSuffix = b".tar\0" as *const u8 as *const core::ffi::c_char;
+        dstSuffix = c".tar".as_ptr();
         dstSuffixLen = strlen(dstSuffix);
     }
     if !outDirName.is_null() {
@@ -6641,22 +5935,18 @@ unsafe fn FIO_determineDstName(
         dstFileNameBuffer = malloc(dfnbCapacity) as *mut core::ffi::c_char;
         if dstFileNameBuffer.is_null() {
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c"zstd: ".as_ptr());
             }
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                    c"Error defined at %s, line %i : \n".as_ptr(),
+                    c"fileio.c".as_ptr(),
                     3067,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                    74,
-                );
+                fprintf(stderr, c"error %i : ".as_ptr(), 74);
             }
             if g_display_prefs.displayLevel >= 1 {
                 eprintln!(
@@ -6713,33 +6003,24 @@ pub unsafe fn FIO_decompressMultipleFilenames(
             );
             if dstFile.is_null() {
                 if g_display_prefs.displayLevel >= 1 {
-                    fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                    fprintf(stderr, c"zstd: ".as_ptr());
                 }
                 if g_display_prefs.displayLevel >= 5 {
                     fprintf(
                         stderr,
-                        b"Error defined at %s, line %i : \n\0" as *const u8
-                            as *const core::ffi::c_char,
-                        b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                        c"Error defined at %s, line %i : \n".as_ptr(),
+                        c"fileio.c".as_ptr(),
                         3107,
                     );
                 }
                 if g_display_prefs.displayLevel >= 1 {
-                    fprintf(
-                        stderr,
-                        b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                        19,
-                    );
+                    fprintf(stderr, c"error %i : ".as_ptr(), 19);
                 }
                 if g_display_prefs.displayLevel >= 1 {
-                    fprintf(
-                        stderr,
-                        b"cannot open %s\0" as *const u8 as *const core::ffi::c_char,
-                        outFileName,
-                    );
+                    fprintf(stderr, c"cannot open %s".as_ptr(), outFileName);
                 }
                 if g_display_prefs.displayLevel >= 1 {
-                    fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                    fprintf(stderr, c" \n".as_ptr());
                 }
                 exit(19);
             }
@@ -6761,22 +6042,18 @@ pub unsafe fn FIO_decompressMultipleFilenames(
         }
         if (*prefs).testMode == 0 && AIO_WritePool_closeFile(ress.writeCtx) != 0 {
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c"zstd: ".as_ptr());
             }
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"fileio.c\0" as *const u8 as *const core::ffi::c_char,
+                    c"Error defined at %s, line %i : \n".as_ptr(),
+                    c"fileio.c".as_ptr(),
                     3117,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                    72,
-                );
+                fprintf(stderr, c"error %i : ".as_ptr(), 72);
             }
             if g_display_prefs.displayLevel >= 1 {
                 eprintln!(
@@ -6806,8 +6083,7 @@ pub unsafe fn FIO_decompressMultipleFilenames(
                 } else if g_display_prefs.displayLevel >= 2 {
                     fprintf(
                         stderr,
-                        b"zstd: --output-dir-mirror cannot decompress '%s' into '%s'\n\0"
-                            as *const u8 as *const core::ffi::c_char,
+                        c"zstd: --output-dir-mirror cannot decompress '%s' into '%s'\n".as_ptr(),
                         srcFileName,
                         outMirroredRootDirName,
                     );
@@ -6838,11 +6114,7 @@ pub unsafe fn FIO_decompressMultipleFilenames(
                     == FIO_ps_always as core::ffi::c_int as core::ffi::c_uint)
             && g_display_prefs.displayLevel >= 1
         {
-            fprintf(
-                stderr,
-                b"\r%79s\r\0" as *const u8 as *const core::ffi::c_char,
-                b"\0" as *const u8 as *const core::ffi::c_char,
-            );
+            fprintf(stderr, c"\r%79s\r".as_ptr(), c"".as_ptr());
         }
         if (g_display_prefs.displayLevel >= 2
             || g_display_prefs.progressSetting as core::ffi::c_uint
@@ -6851,8 +6123,7 @@ pub unsafe fn FIO_decompressMultipleFilenames(
         {
             fprintf(
                 stderr,
-                b"%d files decompressed : %6llu bytes total \n\0" as *const u8
-                    as *const core::ffi::c_char,
+                c"%d files decompressed : %6llu bytes total \n".as_ptr(),
                 (*fCtx).nbFilesProcessed,
                 (*fCtx).totalBytesOutput as core::ffi::c_ulonglong,
             );
@@ -6867,16 +6138,10 @@ unsafe fn FIO_analyzeFrames(info: *mut fileInfo_t, srcFile: *mut FILE) -> InfoEr
         let numBytesRead = fread(
             headerBuffer.as_mut_ptr() as *mut core::ffi::c_void,
             1,
-            ::core::mem::size_of::<[u8; 18]>(),
+            size_of::<[u8; 18]>(),
             srcFile,
         );
-        if numBytesRead
-            < (if ZSTD_f_zstd1 as core::ffi::c_int == ZSTD_f_zstd1 as core::ffi::c_int {
-                6
-            } else {
-                2
-            }) as size_t
-        {
+        if numBytesRead < Format::ZSTD_f_zstd1.frame_header_size_min() {
             if feof(srcFile) != 0
                 && numBytesRead == 0
                 && (*info).compressedSize > 0
@@ -6888,15 +6153,14 @@ unsafe fn FIO_analyzeFrames(info: *mut fileInfo_t, srcFile: *mut FILE) -> InfoEr
                     if g_display_prefs.displayLevel >= 1 {
                         fprintf(
                             stderr,
-                            b"Error: seeked to position %llu, which is beyond file size of %llu\n\0"
-                                as *const u8
-                                as *const core::ffi::c_char,
+                            c"Error: seeked to position %llu, which is beyond file size of %llu\n"
+                                .as_ptr(),
                             file_position,
                             file_size,
                         );
                     }
                     if g_display_prefs.displayLevel >= 1 {
-                        fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                        fprintf(stderr, c" \n".as_ptr());
                     }
                     return info_truncated_input;
                 }
@@ -6906,24 +6170,22 @@ unsafe fn FIO_analyzeFrames(info: *mut fileInfo_t, srcFile: *mut FILE) -> InfoEr
                     if g_display_prefs.displayLevel >= 1 {
                         fprintf(
                             stderr,
-                            b"Error: reached end of file with incomplete frame\0" as *const u8
-                                as *const core::ffi::c_char,
+                            c"Error: reached end of file with incomplete frame".as_ptr(),
                         );
                     }
                     if g_display_prefs.displayLevel >= 1 {
-                        fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                        fprintf(stderr, c" \n".as_ptr());
                     }
                     return info_not_zstd;
                 }
                 if g_display_prefs.displayLevel >= 1 {
                     fprintf(
                         stderr,
-                        b"Error: did not reach end of file but ran out of frames\0" as *const u8
-                            as *const core::ffi::c_char,
+                        c"Error: did not reach end of file but ran out of frames".as_ptr(),
                     );
                 }
                 if g_display_prefs.displayLevel >= 1 {
-                    fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                    fprintf(stderr, c" \n".as_ptr());
                 }
                 return info_frame_error;
             }
@@ -6960,22 +6222,17 @@ unsafe fn FIO_analyzeFrames(info: *mut fileInfo_t, srcFile: *mut FILE) -> InfoEr
                 ) != 0
                 {
                     if g_display_prefs.displayLevel >= 1 {
-                        fprintf(
-                            stderr,
-                            b"Error: could not decode frame header\0" as *const u8
-                                as *const core::ffi::c_char,
-                        );
+                        fprintf(stderr, c"Error: could not decode frame header".as_ptr());
                     }
                     if g_display_prefs.displayLevel >= 1 {
-                        fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                        fprintf(stderr, c" \n".as_ptr());
                     }
                     return info_frame_error;
                 }
                 if (*info).dictID != 0 && (*info).dictID != header.dictID {
                     fprintf(
                         stderr,
-                        b"WARNING: File contains multiple frames with different dictionary IDs. Showing dictID 0 instead\0"
-                            as *const u8 as *const core::ffi::c_char,
+                        c"WARNING: File contains multiple frames with different dictionary IDs. Showing dictID 0 instead".as_ptr(),
                     );
                     (*info).dictID = 0;
                 } else {
@@ -6990,12 +6247,11 @@ unsafe fn FIO_analyzeFrames(info: *mut fileInfo_t, srcFile: *mut FILE) -> InfoEr
                     if g_display_prefs.displayLevel >= 1 {
                         fprintf(
                             stderr,
-                            b"Error: could not determine frame header size\0" as *const u8
-                                as *const core::ffi::c_char,
+                            c"Error: could not determine frame header size".as_ptr(),
                         );
                     }
                     if g_display_prefs.displayLevel >= 1 {
-                        fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                        fprintf(stderr, c" \n".as_ptr());
                     }
                     return info_frame_error;
                 }
@@ -7008,12 +6264,11 @@ unsafe fn FIO_analyzeFrames(info: *mut fileInfo_t, srcFile: *mut FILE) -> InfoEr
                     if g_display_prefs.displayLevel >= 1 {
                         fprintf(
                             stderr,
-                            b"Error: could not move to end of frame header\0" as *const u8
-                                as *const core::ffi::c_char,
+                            c"Error: could not move to end of frame header".as_ptr(),
                         );
                     }
                     if g_display_prefs.displayLevel >= 1 {
-                        fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                        fprintf(stderr, c" \n".as_ptr());
                     }
                     return info_frame_error;
                 }
@@ -7028,14 +6283,10 @@ unsafe fn FIO_analyzeFrames(info: *mut fileInfo_t, srcFile: *mut FILE) -> InfoEr
                     ) != 3
                     {
                         if g_display_prefs.displayLevel >= 1 {
-                            fprintf(
-                                stderr,
-                                b"Error while reading block header\0" as *const u8
-                                    as *const core::ffi::c_char,
-                            );
+                            fprintf(stderr, c"Error while reading block header".as_ptr());
                         }
                         if g_display_prefs.displayLevel >= 1 {
-                            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                            fprintf(stderr, c" \n".as_ptr());
                         }
                         return info_frame_error;
                     }
@@ -7051,28 +6302,20 @@ unsafe fn FIO_analyzeFrames(info: *mut fileInfo_t, srcFile: *mut FILE) -> InfoEr
                     };
                     if isWrongBlock != 0 {
                         if g_display_prefs.displayLevel >= 1 {
-                            fprintf(
-                                stderr,
-                                b"Error: unsupported block type\0" as *const u8
-                                    as *const core::ffi::c_char,
-                            );
+                            fprintf(stderr, c"Error: unsupported block type".as_ptr());
                         }
                         if g_display_prefs.displayLevel >= 1 {
-                            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                            fprintf(stderr, c" \n".as_ptr());
                         }
                         return info_frame_error;
                     }
                     lastBlock = (blockHeader & 1) as core::ffi::c_int;
                     if fseek(srcFile, blockSize, 1) != 0 {
                         if g_display_prefs.displayLevel >= 1 {
-                            fprintf(
-                                stderr,
-                                b"Error: could not skip to end of block\0" as *const u8
-                                    as *const core::ffi::c_char,
-                            );
+                            fprintf(stderr, c"Error: could not skip to end of block".as_ptr());
                         }
                         if g_display_prefs.displayLevel >= 1 {
-                            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                            fprintf(stderr, c" \n".as_ptr());
                         }
                         return info_frame_error;
                     }
@@ -7081,8 +6324,7 @@ unsafe fn FIO_analyzeFrames(info: *mut fileInfo_t, srcFile: *mut FILE) -> InfoEr
                     }
                 }
                 let frameHeaderDescriptor = *headerBuffer.as_mut_ptr().offset(4);
-                let contentChecksumFlag =
-                    (frameHeaderDescriptor as core::ffi::c_int & (1) << 2) >> 2;
+                let contentChecksumFlag = (frameHeaderDescriptor as core::ffi::c_int & 1 << 2) >> 2;
                 if contentChecksumFlag != 0 {
                     (*info).usesCheck = 1;
                     if fread(
@@ -7093,20 +6335,16 @@ unsafe fn FIO_analyzeFrames(info: *mut fileInfo_t, srcFile: *mut FILE) -> InfoEr
                     ) != 4
                     {
                         if g_display_prefs.displayLevel >= 1 {
-                            fprintf(
-                                stderr,
-                                b"Error: could not read checksum\0" as *const u8
-                                    as *const core::ffi::c_char,
-                            );
+                            fprintf(stderr, c"Error: could not read checksum".as_ptr());
                         }
                         if g_display_prefs.displayLevel >= 1 {
-                            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                            fprintf(stderr, c" \n".as_ptr());
                         }
                         return info_frame_error;
                     }
                 }
                 (*info).numActualFrames += 1;
-            } else if magicNumber & ZSTD_MAGIC_SKIPPABLE_MASK == ZSTD_MAGIC_SKIPPABLE_START {
+            } else if (magicNumber & ZSTD_MAGIC_SKIPPABLE_MASK) == ZSTD_MAGIC_SKIPPABLE_START {
                 let frameSize =
                     MEM_readLE32(headerBuffer.as_mut_ptr().offset(4) as *const core::ffi::c_void);
                 let seek = (8u32.wrapping_add(frameSize) as size_t).wrapping_sub(numBytesRead)
@@ -7115,12 +6353,11 @@ unsafe fn FIO_analyzeFrames(info: *mut fileInfo_t, srcFile: *mut FILE) -> InfoEr
                     if g_display_prefs.displayLevel >= 1 {
                         fprintf(
                             stderr,
-                            b"Error: could not find end of skippable frame\0" as *const u8
-                                as *const core::ffi::c_char,
+                            c"Error: could not find end of skippable frame".as_ptr(),
                         );
                     }
                     if g_display_prefs.displayLevel >= 1 {
-                        fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                        fprintf(stderr, c" \n".as_ptr());
                     }
                     return info_frame_error;
                 }
@@ -7168,12 +6405,12 @@ unsafe fn getFileInfo_fileConfirmed(
         if g_display_prefs.displayLevel >= 1 {
             fprintf(
                 stderr,
-                b"Error: could not open source file %s\0" as *const u8 as *const core::ffi::c_char,
+                c"Error: could not open source file %s".as_ptr(),
                 inFileName,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         return info_file_error;
     }
@@ -7186,14 +6423,10 @@ unsafe fn getFileInfo_fileConfirmed(
 unsafe fn getFileInfo(info: *mut fileInfo_t, srcFileName: *const core::ffi::c_char) -> InfoError {
     if UTIL_isRegularFile(srcFileName) == 0 {
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"Error : %s is not a file\0" as *const u8 as *const core::ffi::c_char,
-                srcFileName,
-            );
+            fprintf(stderr, c"Error : %s is not a file".as_ptr(), srcFileName);
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         return info_file_error;
     }
@@ -7214,16 +6447,15 @@ unsafe fn displayInfo(
             / (*info).compressedSize as core::ffi::c_double
     };
     let checkString = if (*info).usesCheck != 0 {
-        b"XXH64\0" as *const u8 as *const core::ffi::c_char
+        c"XXH64".as_ptr()
     } else {
-        b"None\0" as *const u8 as *const core::ffi::c_char
+        c"None".as_ptr()
     };
     if displayLevel <= 2 {
         if (*info).decompUnavailable == 0 {
             fprintf(
                 stdout,
-                b"%6d  %5d  %6.*f%4s  %8.*f%4s  %5.3f  %5s  %s\n\0" as *const u8
-                    as *const core::ffi::c_char,
+                c"%6d  %5d  %6.*f%4s  %8.*f%4s  %5.3f  %5s  %s\n".as_ptr(),
                 (*info).numSkippableFrames + (*info).numActualFrames,
                 (*info).numSkippableFrames,
                 compressed_hrs.precision,
@@ -7239,8 +6471,7 @@ unsafe fn displayInfo(
         } else {
             fprintf(
                 stdout,
-                b"%6d  %5d  %6.*f%4s                       %5s  %s\n\0" as *const u8
-                    as *const core::ffi::c_char,
+                c"%6d  %5d  %6.*f%4s                       %5s  %s\n".as_ptr(),
                 (*info).numSkippableFrames + (*info).numActualFrames,
                 (*info).numSkippableFrames,
                 compressed_hrs.precision,
@@ -7251,31 +6482,23 @@ unsafe fn displayInfo(
             );
         }
     } else {
+        fprintf(stdout, c"%s \n".as_ptr(), inFileName);
         fprintf(
             stdout,
-            b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-            inFileName,
-        );
-        fprintf(
-            stdout,
-            b"# Zstandard Frames: %d\n\0" as *const u8 as *const core::ffi::c_char,
+            c"# Zstandard Frames: %d\n".as_ptr(),
             (*info).numActualFrames,
         );
         if (*info).numSkippableFrames != 0 {
             fprintf(
                 stdout,
-                b"# Skippable Frames: %d\n\0" as *const u8 as *const core::ffi::c_char,
+                c"# Skippable Frames: %d\n".as_ptr(),
                 (*info).numSkippableFrames,
             );
         }
+        fprintf(stdout, c"DictID: %u\n".as_ptr(), (*info).dictID);
         fprintf(
             stdout,
-            b"DictID: %u\n\0" as *const u8 as *const core::ffi::c_char,
-            (*info).dictID,
-        );
-        fprintf(
-            stdout,
-            b"Window Size: %.*f%s (%llu B)\n\0" as *const u8 as *const core::ffi::c_char,
+            c"Window Size: %.*f%s (%llu B)\n".as_ptr(),
             window_hrs.precision,
             window_hrs.value,
             window_hrs.suffix,
@@ -7283,7 +6506,7 @@ unsafe fn displayInfo(
         );
         fprintf(
             stdout,
-            b"Compressed Size: %.*f%s (%llu B)\n\0" as *const u8 as *const core::ffi::c_char,
+            c"Compressed Size: %.*f%s (%llu B)\n".as_ptr(),
             compressed_hrs.precision,
             compressed_hrs.value,
             compressed_hrs.suffix,
@@ -7292,22 +6515,18 @@ unsafe fn displayInfo(
         if (*info).decompUnavailable == 0 {
             fprintf(
                 stdout,
-                b"Decompressed Size: %.*f%s (%llu B)\n\0" as *const u8 as *const core::ffi::c_char,
+                c"Decompressed Size: %.*f%s (%llu B)\n".as_ptr(),
                 decompressed_hrs.precision,
                 decompressed_hrs.value,
                 decompressed_hrs.suffix,
                 (*info).decompressedSize as core::ffi::c_ulonglong,
             );
-            fprintf(
-                stdout,
-                b"Ratio: %.4f\n\0" as *const u8 as *const core::ffi::c_char,
-                ratio,
-            );
+            fprintf(stdout, c"Ratio: %.4f\n".as_ptr(), ratio);
         }
         if (*info).usesCheck != 0 && (*info).numActualFrames == 1 {
             fprintf(
                 stdout,
-                b"Check: %s %02x%02x%02x%02x\n\0" as *const u8 as *const core::ffi::c_char,
+                c"Check: %s %02x%02x%02x%02x\n".as_ptr(),
                 checkString,
                 *((*info).checksum).as_ptr().offset(3) as core::ffi::c_int,
                 *((*info).checksum).as_ptr().offset(2) as core::ffi::c_int,
@@ -7315,13 +6534,9 @@ unsafe fn displayInfo(
                 *((*info).checksum).as_ptr().offset(0) as core::ffi::c_int,
             );
         } else {
-            fprintf(
-                stdout,
-                b"Check: %s\n\0" as *const u8 as *const core::ffi::c_char,
-                checkString,
-            );
+            fprintf(stdout, c"Check: %s\n".as_ptr(), checkString);
         }
-        fprintf(stdout, b"\n\0" as *const u8 as *const core::ffi::c_char);
+        fprintf(stdout, c"\n".as_ptr());
     }
 }
 unsafe fn FIO_addFInfo(fi1: fileInfo_t, fi2: fileInfo_t) -> fileInfo_t {
@@ -7340,7 +6555,7 @@ unsafe fn FIO_addFInfo(fi1: fileInfo_t, fi2: fileInfo_t) -> fileInfo_t {
     ptr::write_bytes(
         &mut total as *mut fileInfo_t as *mut u8,
         0,
-        ::core::mem::size_of::<fileInfo_t>(),
+        size_of::<fileInfo_t>(),
     );
     total.numActualFrames = fi1.numActualFrames + fi2.numActualFrames;
     total.numSkippableFrames = fi1.numSkippableFrames + fi2.numSkippableFrames;
@@ -7371,7 +6586,7 @@ unsafe fn FIO_listFile(
     ptr::write_bytes(
         &mut info as *mut fileInfo_t as *mut u8,
         0,
-        ::core::mem::size_of::<fileInfo_t>(),
+        size_of::<fileInfo_t>(),
     );
     let error = getFileInfo(&mut info, inFileName);
     match error as core::ffi::c_uint {
@@ -7379,7 +6594,7 @@ unsafe fn FIO_listFile(
             if g_display_prefs.displayLevel >= 1 {
                 fprintf(
                     stderr,
-                    b"Error while parsing \"%s\" \n\0" as *const u8 as *const core::ffi::c_char,
+                    c"Error while parsing \"%s\" \n".as_ptr(),
                     inFileName,
                 );
             }
@@ -7387,32 +6602,28 @@ unsafe fn FIO_listFile(
         2 => {
             fprintf(
                 stdout,
-                b"File \"%s\" not compressed by zstd \n\0" as *const u8 as *const core::ffi::c_char,
+                c"File \"%s\" not compressed by zstd \n".as_ptr(),
                 inFileName,
             );
             if displayLevel > 2 {
-                fprintf(stdout, b"\n\0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stdout, c"\n".as_ptr());
             }
             return 1;
         }
         3 => {
             if displayLevel > 2 {
-                fprintf(stdout, b"\n\0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stdout, c"\n".as_ptr());
             }
             return 1;
         }
         4 => {
-            fprintf(
-                stdout,
-                b"File \"%s\" is truncated \n\0" as *const u8 as *const core::ffi::c_char,
-                inFileName,
-            );
+            fprintf(stdout, c"File \"%s\" is truncated \n".as_ptr(), inFileName);
             if displayLevel > 2 {
-                fprintf(stdout, b"\n\0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stdout, c"\n".as_ptr());
             }
             return 1;
         }
-        0 | _ => {}
+        _ => {}
     }
     displayInfo(inFileName, &info, displayLevel);
     *total = FIO_addFInfo(*total, info);
@@ -7431,20 +6642,15 @@ pub unsafe fn FIO_listMultipleFiles(
     let mut u: core::ffi::c_uint = 0;
     u = 0;
     while u < numFiles {
-        if strcmp(
-            *filenameTable.offset(u as isize),
-            b"/*stdin*\\\0" as *const u8 as *const core::ffi::c_char,
-        ) == 0
-        {
+        if strcmp(*filenameTable.offset(u as isize), c"/*stdin*\\".as_ptr()) == 0 {
             if g_display_prefs.displayLevel >= 1 {
                 fprintf(
                     stderr,
-                    b"zstd: --list does not support reading from standard input\0" as *const u8
-                        as *const core::ffi::c_char,
+                    c"zstd: --list does not support reading from standard input".as_ptr(),
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c" \n".as_ptr());
             }
             return 1;
         }
@@ -7454,23 +6660,18 @@ pub unsafe fn FIO_listMultipleFiles(
         if UTIL_isConsole(stdin) == 0 && g_display_prefs.displayLevel >= 1 {
             fprintf(
                 stderr,
-                b"zstd: --list does not support reading from standard input \n\0" as *const u8
-                    as *const core::ffi::c_char,
+                c"zstd: --list does not support reading from standard input \n".as_ptr(),
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"No files given \n\0" as *const u8 as *const core::ffi::c_char,
-            );
+            fprintf(stderr, c"No files given \n".as_ptr());
         }
         return 1;
     }
     if displayLevel <= 2 {
         fprintf(
             stdout,
-            b"Frames  Skips  Compressed  Uncompressed  Ratio  Check  Filename\n\0" as *const u8
-                as *const core::ffi::c_char,
+            c"Frames  Skips  Compressed  Uncompressed  Ratio  Check  Filename\n".as_ptr(),
         );
     }
     let mut error = 0;
@@ -7489,7 +6690,7 @@ pub unsafe fn FIO_listMultipleFiles(
     ptr::write_bytes(
         &mut total as *mut fileInfo_t as *mut u8,
         0,
-        ::core::mem::size_of::<fileInfo_t>(),
+        size_of::<fileInfo_t>(),
     );
     total.usesCheck = 1;
     let mut u_0: core::ffi::c_uint = 0;
@@ -7512,20 +6713,18 @@ pub unsafe fn FIO_listMultipleFiles(
                 / total.compressedSize as core::ffi::c_double
         };
         let checkString = if total.usesCheck != 0 {
-            b"XXH64\0" as *const u8 as *const core::ffi::c_char
+            c"XXH64".as_ptr()
         } else {
-            b"\0" as *const u8 as *const core::ffi::c_char
+            c"".as_ptr()
         };
         fprintf(
             stdout,
-            b"----------------------------------------------------------------- \n\0" as *const u8
-                as *const core::ffi::c_char,
+            c"----------------------------------------------------------------- \n".as_ptr(),
         );
         if total.decompUnavailable != 0 {
             fprintf(
                 stdout,
-                b"%6d  %5d  %6.*f%4s                       %5s  %u files\n\0" as *const u8
-                    as *const core::ffi::c_char,
+                c"%6d  %5d  %6.*f%4s                       %5s  %u files\n".as_ptr(),
                 total.numSkippableFrames + total.numActualFrames,
                 total.numSkippableFrames,
                 compressed_hrs.precision,
@@ -7537,8 +6736,7 @@ pub unsafe fn FIO_listMultipleFiles(
         } else {
             fprintf(
                 stdout,
-                b"%6d  %5d  %6.*f%4s  %8.*f%4s  %5.3f  %5s  %u files\n\0" as *const u8
-                    as *const core::ffi::c_char,
+                c"%6d  %5d  %6.*f%4s  %8.*f%4s  %5.3f  %5s  %u files\n".as_ptr(),
                 total.numSkippableFrames + total.numActualFrames,
                 total.numSkippableFrames,
                 compressed_hrs.precision,

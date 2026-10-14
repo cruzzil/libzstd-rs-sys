@@ -3,13 +3,14 @@ use libc::size_t;
 
 #[cfg(doc)]
 use crate::{
-    lib::compress::zstd_compress::ZSTD_c_maxBlockSize, ZSTD_CDict, ZSTD_DCtx, ZSTD_DCtx_refDDict,
-    ZSTD_DCtx_reset, ZSTD_DCtx_setParameter, ZSTD_DDict, ZSTD_compress_usingDict, ZSTD_decompress,
-    ZSTD_freeDCtx,
+    ZSTD_CDict, ZSTD_DCtx, ZSTD_DCtx_refDDict, ZSTD_DCtx_reset, ZSTD_DCtx_setParameter, ZSTD_DDict,
+    ZSTD_compressBound, ZSTD_compress_usingDict, ZSTD_decompress, ZSTD_freeDCtx,
 };
 
 pub const ZSTD_FRAMEHEADERSIZE_MAX: core::ffi::c_int = 18;
+pub const ZSTD_SKIPPABLEHEADERSIZE: c_uint = 8;
 
+// compression parameter bounds
 pub const ZSTD_WINDOWLOG_MAX_32: core::ffi::c_int = 30;
 pub const ZSTD_WINDOWLOG_MAX_64: core::ffi::c_int = 31;
 pub const ZSTD_WINDOWLOG_MAX: core::ffi::c_int = match size_of::<usize>() {
@@ -17,6 +18,33 @@ pub const ZSTD_WINDOWLOG_MAX: core::ffi::c_int = match size_of::<usize>() {
     8 => ZSTD_WINDOWLOG_MAX_64,
     _ => panic!(),
 };
+pub const ZSTD_WINDOWLOG_MIN: core::ffi::c_int = 10;
+pub const ZSTD_HASHLOG_MAX: core::ffi::c_int = if ZSTD_WINDOWLOG_MAX < 30 {
+    ZSTD_WINDOWLOG_MAX
+} else {
+    30
+};
+pub const ZSTD_HASHLOG_MIN: core::ffi::c_int = 6;
+pub const ZSTD_CHAINLOG_MAX_32: core::ffi::c_int = 29;
+pub const ZSTD_CHAINLOG_MAX_64: core::ffi::c_int = 30;
+pub const ZSTD_CHAINLOG_MAX: core::ffi::c_int = match size_of::<usize>() {
+    4 => ZSTD_CHAINLOG_MAX_32,
+    8 => ZSTD_CHAINLOG_MAX_64,
+    _ => panic!(),
+};
+pub const ZSTD_CHAINLOG_MIN: core::ffi::c_int = ZSTD_HASHLOG_MIN;
+pub const ZSTD_SEARCHLOG_MAX: core::ffi::c_int = ZSTD_WINDOWLOG_MAX - 1;
+pub const ZSTD_SEARCHLOG_MIN: core::ffi::c_int = 1;
+pub const ZSTD_MINMATCH_MAX: core::ffi::c_int = 7;
+pub const ZSTD_MINMATCH_MIN: core::ffi::c_int = 3;
+pub const ZSTD_TARGETLENGTH_MAX: core::ffi::c_int = ZSTD_BLOCKSIZE_MAX;
+pub const ZSTD_TARGETLENGTH_MIN: core::ffi::c_int = 0;
+pub const ZSTD_STRATEGY_MIN: core::ffi::c_int = ZSTD_fast as core::ffi::c_int;
+pub const ZSTD_STRATEGY_MAX: core::ffi::c_int = ZSTD_btultra2 as core::ffi::c_int;
+
+pub const ZSTD_OVERLAPLOG_MIN: core::ffi::c_int = 0;
+pub const ZSTD_OVERLAPLOG_MAX: core::ffi::c_int = 9;
+
 /// By default, the streaming decoder will refuse any frame requiring larger than
 /// (1<<`ZSTD_WINDOWLOG_LIMIT_DEFAULT`) window size to preserve host's memory from unreasonable
 /// requirements. This limit can be overridden using [`ZSTD_DCtx_setParameter`].
@@ -26,11 +54,32 @@ pub const ZSTD_WINDOWLOG_MAX: core::ffi::c_int = match size_of::<usize>() {
 pub const ZSTD_WINDOWLOG_LIMIT_DEFAULT: core::ffi::c_int = 27;
 pub const ZSTD_WINDOWLOG_ABSOLUTEMIN: core::ffi::c_int = 10;
 
+// LDM parameter bounds
+pub const ZSTD_LDM_HASHLOG_MIN: core::ffi::c_int = ZSTD_HASHLOG_MIN;
+pub const ZSTD_LDM_HASHLOG_MAX: core::ffi::c_int = ZSTD_HASHLOG_MAX;
+pub const ZSTD_LDM_MINMATCH_MIN: core::ffi::c_int = 4;
+pub const ZSTD_LDM_MINMATCH_MAX: core::ffi::c_int = 4096;
+pub const ZSTD_LDM_BUCKETSIZELOG_MIN: core::ffi::c_int = 1;
+pub const ZSTD_LDM_BUCKETSIZELOG_MAX: core::ffi::c_int = 8;
+pub const ZSTD_LDM_HASHRATELOG_MIN: core::ffi::c_int = 0;
+pub const ZSTD_LDM_HASHRATELOG_MAX: core::ffi::c_int = ZSTD_WINDOWLOG_MAX - ZSTD_HASHLOG_MIN;
+
+// Advanced parameter bounds
+pub const ZSTD_TARGETCBLOCKSIZE_MIN: core::ffi::c_int = 1340;
+pub const ZSTD_TARGETCBLOCKSIZE_MAX: core::ffi::c_int = ZSTD_BLOCKSIZE_MAX;
+pub const ZSTD_SRCSIZEHINT_MIN: core::ffi::c_int = 0;
+pub const ZSTD_SRCSIZEHINT_MAX: core::ffi::c_int = core::ffi::c_int::MAX;
+
 pub const ZSTD_BLOCKSIZELOG_MAX: c_int = 17;
 pub const ZSTD_BLOCKSIZE_MAX: c_int = 1 << ZSTD_BLOCKSIZELOG_MAX;
 /// The minimum valid max blocksize. Maximum blocksizes smaller than this make [`ZSTD_compressBound`] inaccurate.
 pub const ZSTD_BLOCKSIZE_MAX_MIN: core::ffi::c_int = 1 << 10;
 pub const ZSTD_CLEVEL_DEFAULT: c_int = 3;
+
+#[cfg(target_pointer_width = "64")]
+pub const ZSTD_MAX_INPUT_SIZE: size_t = 0xff00ff00ff00ff00;
+#[cfg(not(target_pointer_width = "64"))]
+pub const ZSTD_MAX_INPUT_SIZE: size_t = 0xff00ff00;
 
 pub const ZSTD_MAGICNUMBER: c_uint = 0xfd2fb528;
 pub const ZSTD_MAGIC_DICTIONARY: c_uint = 0xec30a437;
@@ -45,7 +94,6 @@ pub const ZSTD_VERSION_NUMBER: c_uint =
 
 pub const ZSTD_CONTENTSIZE_UNKNOWN: c_ulonglong = (0 as c_ulonglong).wrapping_sub(1);
 pub const ZSTD_CONTENTSIZE_ERROR: c_ulonglong = (0 as c_ulonglong).wrapping_sub(2);
-pub const ZSTD_SKIPPABLEHEADERSIZE: c_uint = 8;
 
 pub type ZSTD_ErrorCode = core::ffi::c_uint;
 
@@ -96,6 +144,59 @@ pub const ZSTD_lazy: ZSTD_strategy = 4;
 pub const ZSTD_greedy: ZSTD_strategy = 3;
 pub const ZSTD_dfast: ZSTD_strategy = 2;
 pub const ZSTD_fast: ZSTD_strategy = 1;
+
+pub type ZSTD_EndDirective = core::ffi::c_uint;
+/// Flush any remaining data _and_ close current frame.
+/// note that frame is only closed after compressed data is fully flushed (return value == 0).
+/// After that point, any additional data starts a new frame.
+/// note : each frame is independent (does not reference any content from previous frame).
+/// note : multithreaded compression will block to flush as much output as possible.
+pub const ZSTD_e_end: ZSTD_EndDirective = 2;
+/// Flush any data provided so far,
+/// it creates (at least) one new block, that can be decoded immediately on reception;
+/// frame will continue: any future data can still reference previously compressed data, improving compression.
+/// note : multithreaded compression will block to flush as much output as possible.
+pub const ZSTD_e_flush: ZSTD_EndDirective = 1;
+/// Collect more data, encoder decides when to output compressed result, for optimal compression ratio.
+pub const ZSTD_e_continue: ZSTD_EndDirective = 0;
+
+#[derive(Copy, Clone)]
+#[repr(C)]
+pub struct ZSTD_Sequence {
+    /// The offset of the match. (NOT the same as the offset code)
+    /// If offset == 0 and matchLength == 0, this sequence represents the last
+    /// literals in the block of litLength size.
+    pub offset: core::ffi::c_uint,
+    /// Literal length of the sequence.
+    pub litLength: core::ffi::c_uint,
+    /// Match length of the sequence.
+    ///
+    /// Note: Users of this API may provide a sequence with matchLength == litLength == offset == 0.
+    /// In this case, we will treat the sequence as a marker for a block boundary.
+    pub matchLength: core::ffi::c_uint,
+    /// Represents which repeat offset is represented by the field 'offset'.
+    /// Ranges from `[0, 3]`.
+    ///
+    /// Repeat offsets are essentially previous offsets from previous sequences sorted in
+    /// recency order. For more detail, see doc/zstd_compression_format.md
+    ///
+    /// If rep == 0, then 'offset' does not contain a repeat offset.
+    /// If rep > 0:
+    ///  If litLength != 0:
+    ///      rep == 1 --> offset == repeat_offset_1
+    ///      rep == 2 --> offset == repeat_offset_2
+    ///      rep == 3 --> offset == repeat_offset_3
+    ///  If litLength == 0:
+    ///      rep == 1 --> offset == repeat_offset_2
+    ///      rep == 2 --> offset == repeat_offset_3
+    ///      rep == 3 --> offset == repeat_offset_1 - 1
+    ///
+    /// Note: This field is optional. `ZSTD_generateSequences()` will calculate the value of
+    /// 'rep', but repeat offsets do not necessarily need to be calculated from an external
+    /// sequence provider perspective. For example, `ZSTD_compressSequences()` does not
+    /// use this 'rep' field at all (as of now).
+    pub rep: core::ffi::c_uint,
+}
 
 #[derive(Debug, Copy, Clone, Default)]
 #[repr(C)]
@@ -175,9 +276,10 @@ impl From<ZSTD_format_e> for u32 {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
 #[repr(u32)]
 pub enum Format {
+    #[default]
     ZSTD_f_zstd1 = 0,
     ZSTD_f_zstd1_magicless = 1,
 }
@@ -229,7 +331,7 @@ impl TryFrom<i32> for Format {
 }
 
 pub type ZSTD_inBuffer = ZSTD_inBuffer_s;
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default)]
 #[repr(C)]
 pub struct ZSTD_inBuffer_s {
     /// Pointer to start of input buffer
@@ -241,7 +343,7 @@ pub struct ZSTD_inBuffer_s {
 }
 
 pub type ZSTD_outBuffer = ZSTD_outBuffer_s;
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default)]
 #[repr(C)]
 pub struct ZSTD_outBuffer_s {
     /// Pointer to start of output buffer
@@ -287,16 +389,6 @@ pub struct ZSTD_frameProgression {
 }
 
 pub mod experimental {
-    use crate::lib::zstd::Format;
-
-    pub const fn ZSTD_FRAMEHEADERSIZE_MIN(format: Format) -> usize {
-        if let Format::ZSTD_f_zstd1 = format {
-            6
-        } else {
-            2
-        }
-    }
-
     pub use crate::lib::common::pool::{
         ZSTD_createThreadPool, ZSTD_freeThreadPool, ZSTD_threadPool,
     };
@@ -386,7 +478,7 @@ impl ZSTD_dParameter {
     /// Allowed values are between 1KB and [`ZSTD_BLOCKSIZE_MAX`] (128KB).
     /// The default is [`ZSTD_BLOCKSIZE_MAX`], and setting to 0 will set to the default.
     ///
-    /// This option is typically used in conjunction with [`ZSTD_c_maxBlockSize`].
+    /// This option is typically used in conjunction with [`ZSTD_cParameter::ZSTD_c_maxBlockSize`].
     ///
     /// **Warning:** This causes the decoder to reject otherwise valid frames that have block sizes
     /// larger than the configured `maxBlockSize`.
@@ -466,6 +558,7 @@ impl ZSTD_cParameter {
     pub const ZSTD_c_enableSeqProducerFallback: Self = Self::ZSTD_c_experimentalParam17;
     pub const ZSTD_c_maxBlockSize: Self = Self::ZSTD_c_experimentalParam18;
     pub const ZSTD_c_repcodeResolution: Self = Self::ZSTD_c_experimentalParam19;
+    /// Older name of [`ZSTD_cParameter::ZSTD_c_repcodeResolution`]
     pub const ZSTD_c_searchForExternalRepcodes: Self = Self::ZSTD_c_experimentalParam19;
 
     pub const ZSTD_c_compressionLevel: Self = Self(100);
@@ -522,7 +615,7 @@ impl ZSTD_ResetDirective {
 ///
 /// - The `CDict`'s tables are not used at all, and instead we use the working
 ///   context alone to reload the dictionary and use params based on the source
-///   size. See [`ZSTD_compress_insertDictionary`] and [`ZSTD_compress_usingDict`].
+///   size. See `ZSTD_compress_insertDictionary` and [`ZSTD_compress_usingDict`].
 ///   This method is effective when the dictionary sizes are very small relative
 ///   to the input size, and the input size is fairly large to begin with.
 ///
@@ -531,7 +624,7 @@ impl ZSTD_ResetDirective {
 /// Zstd is making poor choices, it is possible to override that choice with
 /// this enum.
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ZSTD_dictAttachPref_e(pub(crate) u32);
 impl ZSTD_dictAttachPref_e {
     /// Use the default heuristic
@@ -562,31 +655,53 @@ impl TryFrom<i32> for ZSTD_dictAttachPref_e {
 ///
 /// Zstd can take a decision on whether or not to enable the feature (`ZSTD_ps_auto`),
 /// or set the switch to `ZSTD_ps_enable` or `ZSTD_ps_disable` force enable/disable the feature.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ZSTD_ParamSwitch_e {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ParamSwitch {
     /// Let the library automatically determine whether the feature shall be enabled
-    ZSTD_ps_auto = 0,
+    #[default]
+    Auto = 0,
     /// Force-enable the feature
-    ZSTD_ps_enable = 1,
+    Enable = 1,
     /// Force-disable the feature
-    ZSTD_ps_disable = 2,
+    Disable = 2,
 }
 
-impl ZSTD_ParamSwitch_e {
+impl ParamSwitch {
+    /// The lower and upper bound of this enum
+    pub const BOUNDS: (core::ffi::c_int, core::ffi::c_int) = (Self::Auto as _, Self::Disable as _);
+
     pub fn to_i32(self) -> i32 {
         self as i32
     }
 }
 
-impl TryFrom<i32> for ZSTD_ParamSwitch_e {
+impl TryFrom<i32> for ParamSwitch {
     type Error = ();
 
     fn try_from(value: i32) -> Result<Self, Self::Error> {
         match value {
-            0 => Ok(Self::ZSTD_ps_auto),
-            1 => Ok(Self::ZSTD_ps_enable),
-            2 => Ok(Self::ZSTD_ps_disable),
+            0 => Ok(Self::Auto),
+            1 => Ok(Self::Enable),
+            2 => Ok(Self::Disable),
             _ => Err(()),
         }
     }
 }
+
+pub type ZSTD_SequenceFormat_e = core::ffi::c_uint;
+/// `ZSTD_Sequence[]` has no block delimiters, just sequences
+pub const ZSTD_sf_noBlockDelimiters: ZSTD_SequenceFormat_e = 0;
+/// `ZSTD_Sequence[]` contains explicit block delimiters
+pub const ZSTD_sf_explicitBlockDelimiters: ZSTD_SequenceFormat_e = 1;
+
+pub type ZSTD_sequenceProducer_F = unsafe extern "C" fn(
+    *mut core::ffi::c_void,
+    *mut ZSTD_Sequence,
+    size_t,
+    *const core::ffi::c_void,
+    size_t,
+    *const core::ffi::c_void,
+    size_t,
+    core::ffi::c_int,
+    size_t,
+) -> size_t;

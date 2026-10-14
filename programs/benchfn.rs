@@ -91,7 +91,7 @@ unsafe fn BMK_runOutcome_error(errorResult: size_t) -> BMK_runOutcome_t {
     ptr::write_bytes(
         &mut b as *mut BMK_runOutcome_t as *mut u8,
         0,
-        ::core::mem::size_of::<BMK_runOutcome_t>(),
+        size_of::<BMK_runOutcome_t>(),
     );
     b.error_tag_never_ever_use_directly = 1;
     b.error_result_never_ever_use_directly = errorResult;
@@ -165,7 +165,7 @@ pub unsafe fn BMK_createTimedFnState(
     total_ms: core::ffi::c_uint,
     run_ms: core::ffi::c_uint,
 ) -> *mut BMK_timedFnState_t {
-    let r = malloc(::core::mem::size_of::<BMK_timedFnState_t>()) as *mut BMK_timedFnState_t;
+    let r = malloc(size_of::<BMK_timedFnState_t>()) as *mut BMK_timedFnState_t;
     if r.is_null() {
         return core::ptr::null_mut();
     }
@@ -186,7 +186,7 @@ pub unsafe fn BMK_initStatic_timedFnState(
     if buffer.is_null() {
         return core::ptr::null_mut();
     }
-    if size < ::core::mem::size_of::<BMK_timedFnState_s>() {
+    if size < size_of::<BMK_timedFnState_s>() {
         return core::ptr::null_mut();
     }
     if !(buffer as size_t).is_multiple_of(tfs_alignment) {
@@ -206,9 +206,7 @@ pub unsafe fn BMK_resetTimedFnState(
     if run_ms == 0 {
         run_ms = 1;
     }
-    if run_ms > total_ms {
-        run_ms = total_ms;
-    }
+    run_ms = Ord::min(run_ms, total_ms);
     (*timedFnState).timeSpent_ns = 0;
     (*timedFnState).timeBudget_ns = (total_ms as PTime as core::ffi::c_ulonglong)
         .wrapping_mul(TIMELOOP_NANOSEC)
@@ -261,7 +259,7 @@ pub unsafe fn BMK_benchTimedFn(
             (*cont).nbLoops = ((*cont).nbLoops).wrapping_mul(multiplier);
         }
         if loopDuration_ns < runTimeMin_ns as core::ffi::c_double {
-            assert!(completed == 0);
+            assert_eq!(completed, 0);
         } else {
             if newRunTime.nanoSecPerRun < bestRunTime.nanoSecPerRun {
                 bestRunTime = newRunTime;

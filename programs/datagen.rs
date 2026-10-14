@@ -7,7 +7,7 @@ extern "C" {
 }
 type fixedPoint_24_8 = u32;
 pub const LTLOG: core::ffi::c_int = 13;
-pub const LTSIZE: core::ffi::c_int = (1) << LTLOG;
+pub const LTSIZE: core::ffi::c_int = 1 << LTLOG;
 pub const LTMASK: core::ffi::c_int = LTSIZE - 1;
 unsafe fn RDG_rand(src: *mut u32) -> u32 {
     static prime1: u32 = 2654435761;
@@ -19,7 +19,7 @@ unsafe fn RDG_rand(src: *mut u32) -> u32 {
     *src = rand32;
     rand32 >> 5
 }
-unsafe fn RDG_fillLiteralDistrib(ldt: *mut u8, mut ld: fixedPoint_24_8) {
+unsafe fn RDG_fillLiteralDistrib(ldt: *mut u8, ld: fixedPoint_24_8) {
     let firstChar = (if ld as core::ffi::c_double <= 0.0f64 {
         0
     } else {
@@ -36,16 +36,13 @@ unsafe fn RDG_fillLiteralDistrib(ldt: *mut u8, mut ld: fixedPoint_24_8) {
         '0' as i32
     }) as u8;
     let mut u: u32 = 0;
-    if ld <= 0 {
-        ld = 0;
-    }
     u = 0;
     while u < LTSIZE as u32 {
         let weight = (((LTSIZE as u32).wrapping_sub(u) * ld) >> 8).wrapping_add(1);
-        let end = if u.wrapping_add(weight) < ((1) << 13) as u32 {
+        let end = if u.wrapping_add(weight) < (1 << 13) as u32 {
             u.wrapping_add(weight)
         } else {
-            ((1) << 13) as u32
+            (1 << 13) as u32
         };
         while u < end {
             let fresh0 = u;
@@ -154,11 +151,7 @@ pub unsafe fn RDG_genBuffer(
 ) {
     let mut seed32 = seed;
     let mut ldt: [u8; 8192] = [0; 8192];
-    ptr::write_bytes(
-        ldt.as_mut_ptr() as *mut u8,
-        b'0',
-        ::core::mem::size_of::<[u8; 8192]>(),
-    );
+    ptr::write_bytes(ldt.as_mut_ptr(), b'0', size_of::<[u8; 8192]>());
     if litProba <= 0.0f64 {
         litProba = matchProba / 4.5f64;
     }
@@ -175,23 +168,19 @@ pub unsafe fn RDG_genStdout(
     seed: core::ffi::c_uint,
 ) {
     let mut seed32 = seed;
-    let stdBlockSize = (128 * ((1) << 10)) as size_t;
-    let stdDictSize = (32 * ((1) << 10)) as size_t;
+    let stdBlockSize = (128 * (1 << 10)) as size_t;
+    let stdDictSize = (32 * (1 << 10)) as size_t;
     let buff = malloc(stdDictSize.wrapping_add(stdBlockSize)) as *mut u8;
     let mut total = 0u64;
     let mut ldt: [u8; 8192] = [0; 8192];
     if buff.is_null() {
-        perror(b"datagen\0" as *const u8 as *const core::ffi::c_char);
+        perror(c"datagen".as_ptr());
         exit(1);
     }
     if litProba <= 0.0f64 {
         litProba = matchProba / 4.5f64;
     }
-    ptr::write_bytes(
-        ldt.as_mut_ptr() as *mut u8,
-        b'0',
-        ::core::mem::size_of::<[u8; 8192]>(),
-    );
+    ptr::write_bytes(ldt.as_mut_ptr(), b'0', size_of::<[u8; 8192]>());
     RDG_fillLiteralDistrib(
         ldt.as_mut_ptr(),
         (litProba * 256.0 + 0.001f64) as fixedPoint_24_8,

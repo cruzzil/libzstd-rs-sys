@@ -34,7 +34,6 @@
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
-#![allow(unused_assignments)]
 #![allow(clippy::too_many_arguments)]
 #![cfg_attr(all(feature = "nightly", test), feature(test))]
 #![cfg_attr(feature = "nightly", feature(likely_unlikely))]
@@ -48,6 +47,7 @@ pub mod lib {
         pub(crate) mod allocations;
         pub(crate) mod bits;
         pub(crate) mod bitstream;
+        pub(crate) mod compiler;
         pub mod debug;
         pub(crate) mod entropy_common;
         pub(crate) mod error_private;
@@ -63,11 +63,6 @@ pub mod lib {
         pub mod zstd_trace;
     } // mod common
     pub mod compress {
-        // FIXME
-        #![allow(clippy::wildcard_in_or_patterns)]
-        #![allow(clippy::if_same_then_else)]
-        #![allow(clippy::collapsible_if)]
-        #![allow(clippy::eq_op)]
         pub mod fse_compress;
         pub mod hist;
         pub mod huf_compress;
@@ -87,13 +82,13 @@ pub mod lib {
     pub mod decompress;
     pub(crate) mod polyfill;
     pub(crate) mod dictBuilder {
-        #![allow(clippy::collapsible_if)]
         pub(crate) mod cover;
         pub(crate) mod divsufsort;
         pub(crate) mod fastcover;
         pub(crate) mod zdict;
     } // mod dictBuilder
     pub(crate) mod legacy {
+        #![allow(unused_assignments)]
         pub(crate) mod zstd_v05;
         pub(crate) mod zstd_v06;
         pub(crate) mod zstd_v07;
@@ -103,16 +98,23 @@ pub mod lib {
 } // mod lib
 
 pub use crate::lib::zstd::{
-    ZSTD_ParamSwitch_e, ZSTD_ResetDirective, ZSTD_cParameter, ZSTD_dParameter,
-    ZSTD_dictAttachPref_e, ZSTD_format_e, ZSTD_frameProgression, ZSTD_inBuffer, ZSTD_outBuffer,
-    ZSTD_strategy, ZSTD_BLOCKSIZELOG_MAX, ZSTD_BLOCKSIZE_MAX, ZSTD_BLOCKSIZE_MAX_MIN,
+    ParamSwitch, ZSTD_EndDirective, ZSTD_ResetDirective, ZSTD_Sequence, ZSTD_cParameter,
+    ZSTD_dParameter, ZSTD_dictAttachPref_e, ZSTD_format_e, ZSTD_frameProgression, ZSTD_inBuffer,
+    ZSTD_outBuffer, ZSTD_strategy, ZSTD_BLOCKSIZELOG_MAX, ZSTD_BLOCKSIZE_MAX,
+    ZSTD_BLOCKSIZE_MAX_MIN, ZSTD_CHAINLOG_MAX_32, ZSTD_CHAINLOG_MAX_64, ZSTD_CHAINLOG_MIN,
     ZSTD_CLEVEL_DEFAULT, ZSTD_CONTENTSIZE_ERROR, ZSTD_CONTENTSIZE_UNKNOWN,
-    ZSTD_FRAMEHEADERSIZE_MAX, ZSTD_MAGICNUMBER, ZSTD_MAGIC_DICTIONARY, ZSTD_MAGIC_SKIPPABLE_MASK,
-    ZSTD_MAGIC_SKIPPABLE_START, ZSTD_SKIPPABLEHEADERSIZE, ZSTD_VERSION_MAJOR, ZSTD_VERSION_MINOR,
+    ZSTD_FRAMEHEADERSIZE_MAX, ZSTD_HASHLOG_MIN, ZSTD_LDM_BUCKETSIZELOG_MAX,
+    ZSTD_LDM_BUCKETSIZELOG_MIN, ZSTD_LDM_HASHLOG_MIN, ZSTD_LDM_HASHRATELOG_MIN,
+    ZSTD_LDM_MINMATCH_MAX, ZSTD_LDM_MINMATCH_MIN, ZSTD_MAGICNUMBER, ZSTD_MAGIC_DICTIONARY,
+    ZSTD_MAGIC_SKIPPABLE_MASK, ZSTD_MAGIC_SKIPPABLE_START, ZSTD_MINMATCH_MAX, ZSTD_MINMATCH_MIN,
+    ZSTD_OVERLAPLOG_MAX, ZSTD_OVERLAPLOG_MIN, ZSTD_SEARCHLOG_MIN, ZSTD_SKIPPABLEHEADERSIZE,
+    ZSTD_SRCSIZEHINT_MIN, ZSTD_TARGETCBLOCKSIZE_MAX, ZSTD_TARGETCBLOCKSIZE_MIN,
+    ZSTD_TARGETLENGTH_MAX, ZSTD_TARGETLENGTH_MIN, ZSTD_VERSION_MAJOR, ZSTD_VERSION_MINOR,
     ZSTD_VERSION_NUMBER, ZSTD_VERSION_RELEASE, ZSTD_WINDOWLOG_LIMIT_DEFAULT, ZSTD_WINDOWLOG_MAX_32,
-    ZSTD_WINDOWLOG_MAX_64,
+    ZSTD_WINDOWLOG_MAX_64, ZSTD_WINDOWLOG_MIN,
 };
 
+#[allow(deprecated)] // We still export deprecated functions
 pub use crate::lib::decompress::{
     zstd_ddict::{
         ZSTD_DDict, ZSTD_createDDict, ZSTD_createDDict_byReference, ZSTD_estimateDDictSize,
@@ -152,23 +154,20 @@ pub use crate::lib::zdict::{
     ZDICT_getDictID, ZDICT_getErrorName, ZDICT_isError, ZDICT_params_t, ZDICT_trainFromBuffer,
 };
 
+#[allow(deprecated)] // We still export deprecated functions
 pub use crate::lib::compress::zstd_compress::{
     ZSTD_CCtx, ZSTD_CCtx_getParameter, ZSTD_CCtx_loadDictionary, ZSTD_CCtx_refCDict,
     ZSTD_CCtx_refPrefix, ZSTD_CCtx_reset, ZSTD_CCtx_setParameter, ZSTD_CCtx_setPledgedSrcSize,
-    ZSTD_CDict, ZSTD_CStreamInSize, ZSTD_CStreamOutSize, ZSTD_EndDirective, ZSTD_cParam_getBounds,
-    ZSTD_compress, ZSTD_compress2, ZSTD_compressBlock, ZSTD_compressBound, ZSTD_compressCCtx,
-    ZSTD_compressStream, ZSTD_compressStream2, ZSTD_compress_usingCDict, ZSTD_compress_usingDict,
-    ZSTD_copyCCtx, ZSTD_createCCtx, ZSTD_createCDict, ZSTD_createCDict_byReference,
-    ZSTD_createCStream, ZSTD_endStream, ZSTD_flushStream, ZSTD_freeCCtx, ZSTD_freeCDict,
+    ZSTD_CDict, ZSTD_CStreamInSize, ZSTD_CStreamOutSize, ZSTD_cParam_getBounds, ZSTD_compress,
+    ZSTD_compress2, ZSTD_compressBlock, ZSTD_compressBound, ZSTD_compressCCtx,
+    ZSTD_compressSequences, ZSTD_compressSequencesAndLiterals, ZSTD_compressStream,
+    ZSTD_compressStream2, ZSTD_compress_usingCDict, ZSTD_compress_usingDict, ZSTD_copyCCtx,
+    ZSTD_createCCtx, ZSTD_createCDict, ZSTD_createCDict_byReference, ZSTD_createCStream,
+    ZSTD_endStream, ZSTD_flushStream, ZSTD_freeCCtx, ZSTD_freeCDict, ZSTD_generateSequences,
     ZSTD_getBlockSize, ZSTD_getDictID_fromCDict, ZSTD_getFrameProgression, ZSTD_initCStream,
     ZSTD_initCStream_srcSize, ZSTD_initCStream_usingCDict, ZSTD_initCStream_usingDict,
-    ZSTD_maxCLevel, ZSTD_minCLevel, ZSTD_sequenceBound, ZSTD_sizeof_CCtx, ZSTD_sizeof_CDict,
-    ZSTD_BLOCKSPLITTER_LEVEL_MAX, ZSTD_CHAINLOG_MAX_32, ZSTD_CHAINLOG_MAX_64, ZSTD_CHAINLOG_MIN,
-    ZSTD_HASHLOG_MIN, ZSTD_LDM_BUCKETSIZELOG_MAX, ZSTD_LDM_BUCKETSIZELOG_MIN, ZSTD_LDM_HASHLOG_MIN,
-    ZSTD_LDM_HASHRATELOG_MIN, ZSTD_LDM_MINMATCH_MAX, ZSTD_LDM_MINMATCH_MIN, ZSTD_MINMATCH_MAX,
-    ZSTD_MINMATCH_MIN, ZSTD_OVERLAPLOG_MAX, ZSTD_OVERLAPLOG_MIN, ZSTD_SEARCHLOG_MIN,
-    ZSTD_SRCSIZEHINT_MIN, ZSTD_TARGETCBLOCKSIZE_MAX, ZSTD_TARGETCBLOCKSIZE_MIN,
-    ZSTD_TARGETLENGTH_MAX, ZSTD_TARGETLENGTH_MIN, ZSTD_WINDOWLOG_MIN,
+    ZSTD_maxCLevel, ZSTD_mergeBlockDelimiters, ZSTD_minCLevel, ZSTD_sequenceBound,
+    ZSTD_sizeof_CCtx, ZSTD_sizeof_CDict, ZSTD_BLOCKSPLITTER_LEVEL_MAX,
 };
 
 pub mod internal {
@@ -184,25 +183,38 @@ pub mod internal {
     };
 }
 
-#[cfg(all(feature = "export-symbols", feature = "semver-prefix"))]
-macro_rules! prefix {
-    ($name:expr) => {
-        concat!(
-            "LIBZSTD_RS_SYS_v",
-            env!("CARGO_PKG_VERSION_MAJOR"),
-            "_",
-            env!("CARGO_PKG_VERSION_MINOR"),
-            "_x_",
-            stringify!($name)
-        )
-    };
-}
-
-#[cfg(all(feature = "export-symbols", not(feature = "semver-prefix")))]
-macro_rules! prefix {
-    ($name:expr) => {
-        stringify!($name)
-    };
+crate::lib::polyfill::cfg_select! {
+    feature = "custom-prefix" => {
+        #[cfg(feature = "export-symbols")]
+        macro_rules! prefix {
+            ($name:expr) => {
+                concat!(env!("LIBZSTD_RS_SYS_PREFIX"), stringify!($name))
+            };
+        }
+    }
+    feature = "semver-prefix" => {
+        #[cfg(feature = "export-symbols")]
+        macro_rules! prefix {
+            ($name:expr) => {
+                concat!(
+                    "LIBZSTD_RS_SYS_v",
+                    env!("CARGO_PKG_VERSION_MAJOR"),
+                    "_",
+                    env!("CARGO_PKG_VERSION_MINOR"),
+                    "_x_",
+                    stringify!($name)
+                )
+            };
+        }
+    }
+    _ => {
+        #[cfg(feature = "export-symbols")]
+        macro_rules! prefix {
+            ($name:expr) => {
+                stringify!($name)
+            };
+        }
+    }
 }
 
 #[cfg(feature = "export-symbols")]

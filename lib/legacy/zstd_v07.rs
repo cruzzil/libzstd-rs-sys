@@ -223,16 +223,12 @@ impl<'a> BITv07_DStream_t<'a> {
             return Err(Error::srcSize_wrong);
         }
 
-        if src.len() >= ::core::mem::size_of::<usize>() {
+        if src.len() >= size_of::<usize>() {
             // normal case
             let mut bitD = BITv07_DStream_t {
                 bitContainer: 0,
                 bitsConsumed: 0,
-                ptr: unsafe {
-                    src.as_ptr()
-                        .add(src.len())
-                        .sub(::core::mem::size_of::<usize>())
-                },
+                ptr: unsafe { src.as_ptr().add(src.len()).sub(size_of::<usize>()) },
                 start: src.as_ptr(),
                 _marker: PhantomData,
             };
@@ -294,7 +290,7 @@ impl<'a> BITv07_DStream_t<'a> {
                 // endMark not present
                 return Err(Error::GENERIC);
             }
-            bitD.bitsConsumed += (::core::mem::size_of::<usize>() - src.len()) as u32 * 8;
+            bitD.bitsConsumed += (size_of::<usize>() - src.len()) as u32 * 8;
 
             Ok(bitD)
         }
@@ -346,14 +342,14 @@ impl<'a> BITv07_DStream_t<'a> {
             }
             return StreamStatus::Completed;
         }
-        let mut nbBytes = self.bitsConsumed >> 3;
+        let mut nbBytes = self.bitsConsumed as usize >> 3;
         let mut result = StreamStatus::Unfinished;
-        if unsafe { (self.ptr).sub(nbBytes as usize) } < self.start {
-            nbBytes = unsafe { (self.ptr).offset_from(self.start) } as u32;
+        if unsafe { self.ptr.sub(nbBytes) } < self.start {
+            nbBytes = unsafe { self.ptr.offset_from_unsigned(self.start) };
             result = StreamStatus::EndOfBuffer;
         }
-        self.ptr = unsafe { (self.ptr).sub(nbBytes as usize) };
-        self.bitsConsumed = (self.bitsConsumed).wrapping_sub(nbBytes * 8);
+        self.ptr = unsafe { self.ptr.sub(nbBytes) };
+        self.bitsConsumed = (self.bitsConsumed).wrapping_sub((nbBytes * 8) as u32);
         self.bitContainer = unsafe { MEM_readLEST(self.ptr as *const core::ffi::c_void) };
         result
     }
@@ -448,9 +444,9 @@ unsafe fn FSEv07_readNCount(
     nbBits += 1;
 
     let mut charnum = 0;
-    let mut previous0 = 0;
+    let mut previous0 = false;
     while remaining > 1 && charnum <= *maxSVPtr {
-        if previous0 != 0 {
+        if previous0 {
             let mut n0 = charnum;
             while bitStream & 0xffff == 0xffff {
                 n0 = n0.wrapping_add(24);
@@ -473,9 +469,8 @@ unsafe fn FSEv07_readNCount(
                 return Err(Error::maxSymbolValue_tooSmall);
             }
             while charnum < n0 {
-                let fresh0 = charnum;
+                normalizedCounter[charnum as usize] = 0;
                 charnum = charnum.wrapping_add(1);
-                normalizedCounter[fresh0 as usize] = 0;
             }
             if ip <= iend.sub(7) || ip.offset((bitCount >> 3) as isize) <= iend.sub(4) {
                 ip = ip.offset((bitCount >> 3) as isize);
@@ -499,10 +494,9 @@ unsafe fn FSEv07_readNCount(
         }
         count -= 1;
         remaining -= count.abs() as core::ffi::c_int;
-        let fresh1 = charnum;
+        normalizedCounter[charnum as usize] = count;
         charnum = charnum.wrapping_add(1);
-        normalizedCounter[fresh1 as usize] = count;
-        previous0 = (count == 0) as core::ffi::c_int;
+        previous0 = count == 0;
         while remaining < threshold {
             nbBits -= 1;
             threshold >>= 1;
@@ -576,15 +570,12 @@ fn HUFv07_readStats(
     }
     rankStats.fill(0);
     weightTotal = 0;
-    let mut n_0: usize = 0;
-    while n_0 < oSize {
-        if huffWeight[n_0] as usize >= HUFv07_TABLELOG_ABSOLUTEMAX {
+    for &weight in &huffWeight[..oSize] {
+        if weight as usize >= HUFv07_TABLELOG_ABSOLUTEMAX {
             return Err(Error::corruption_detected);
         }
-        rankStats[usize::from(huffWeight[n_0])] += 1;
-        weightTotal =
-            weightTotal.wrapping_add(((1) << huffWeight[n_0] as core::ffi::c_int >> 1) as u32);
-        n_0 += 1;
+        rankStats[usize::from(weight)] += 1;
+        weightTotal = weightTotal.wrapping_add((1 << weight as core::ffi::c_int >> 1) as u32);
     }
     if weightTotal == 0 {
         return Err(Error::corruption_detected);
@@ -594,9 +585,9 @@ fn HUFv07_readStats(
         return Err(Error::corruption_detected);
     }
     *tableLogPtr = tableLog;
-    let total = ((1) << tableLog) as u32;
+    let total = (1 << tableLog) as u32;
     let rest = total.wrapping_sub(weightTotal);
-    let verif = ((1) << BITv07_highbit32(rest)) as u32;
+    let verif = (1 << BITv07_highbit32(rest)) as u32;
     let lastWeight = (BITv07_highbit32(rest)).wrapping_add(1);
     if verif != rest {
         return Err(Error::corruption_detected);
@@ -618,7 +609,7 @@ fn FSEv07_buildDTable<const N: usize>(
     let tableDecode = &mut dt.data;
     let mut symbolNext: [u16; 256] = [0; 256];
     let maxSV1 = maxSymbolValue as usize + 1;
-    let tableSize = ((1) << tableLog) as u32;
+    let tableSize = (1 << tableLog) as u32;
     let mut highThreshold = tableSize.wrapping_sub(1);
     if maxSymbolValue > FSEv07_MAX_SYMBOL_VALUE as core::ffi::c_uint {
         return Err(Error::maxSymbolValue_tooLarge);
@@ -632,12 +623,11 @@ fn FSEv07_buildDTable<const N: usize>(
     };
     DTableH.tableLog = tableLog as u16;
     DTableH.fastMode = 1;
-    let largeLimit = ((1) << tableLog.wrapping_sub(1)) as i16;
+    let largeLimit = (1 << tableLog.wrapping_sub(1)) as i16;
     for s in 0..maxSV1 {
         if normalizedCounter[s] == -1 {
-            let fresh4 = highThreshold;
+            tableDecode[highThreshold as usize].symbol = s as u8;
             highThreshold = highThreshold.wrapping_sub(1);
-            tableDecode[fresh4 as usize].symbol = s as u8;
             symbolNext[s] = 1;
         } else {
             if normalizedCounter[s] >= largeLimit {
@@ -654,22 +644,18 @@ fn FSEv07_buildDTable<const N: usize>(
     let mut position = 0u32;
     #[allow(clippy::needless_range_loop)]
     for s in 0..maxSV1 {
-        let mut i: core::ffi::c_int = 0;
-        while i < normalizedCounter[s] as core::ffi::c_int {
+        for _ in 0..normalizedCounter[s] as core::ffi::c_int {
             tableDecode[position as usize].symbol = s as u8;
             position = position.wrapping_add(step) & tableMask;
             while position > highThreshold {
                 position = position.wrapping_add(step) & tableMask;
             }
-            i += 1;
         }
     }
     if position != 0 {
         return Err(Error::GENERIC);
     }
-    let mut u: u32 = 0;
-    u = 0;
-    while u < tableSize {
+    for u in 0..tableSize {
         let symbol = tableDecode[u as usize].symbol;
         let nextState = symbolNext[usize::from(symbol)];
         symbolNext[usize::from(symbol)] += 1;
@@ -679,7 +665,6 @@ fn FSEv07_buildDTable<const N: usize>(
             << tableDecode[u as usize].nbBits as core::ffi::c_int)
             as u32)
             .wrapping_sub(tableSize) as u16;
-        u = u.wrapping_add(1);
     }
     Ok(())
 }
@@ -848,11 +833,7 @@ fn HUFv07_readDTableX2(DTable: &mut HUFv07_DTable, src: &[u8]) -> Result<usize, 
             byte: n as u8,
             nbBits: tableLog.wrapping_add(1).wrapping_sub(w as u32) as u8,
         };
-        let mut i = rankVal[usize::from(w)];
-        while i < (rankVal[usize::from(w)]).wrapping_add(length) {
-            dt[i as usize] = D;
-            i += 1;
-        }
+        dt[rankVal[usize::from(w)] as usize..][..length as usize].fill(D);
         rankVal[usize::from(w)] += length;
     }
     Ok(iSize)
@@ -1037,26 +1018,20 @@ fn HUFv07_fillDTableX4Level2(
         DElt.sequence = LE16(baseSeq.to_le_bytes());
         DElt.nbBits = consumed as u8;
         DElt.length = 1;
-        let mut i = 0;
-        while i < skipSize {
-            DTable[i as usize] = DElt;
-            i = i.wrapping_add(1);
-        }
+        DTable[..skipSize as usize].fill(DElt);
     }
     for sym in sortedSymbols {
         let symbol = sym.symbol as u32;
         let weight = sym.weight as u32;
         let nbBits = nbBitsBaseline.wrapping_sub(weight);
-        let length = ((1) << sizeLog.wrapping_sub(nbBits)) as u32;
+        let length = (1 << sizeLog.wrapping_sub(nbBits)) as u32;
         let start = rankVal[weight as usize];
         DElt.sequence = LE16(u16::to_le_bytes(
             (baseSeq as u32).wrapping_add(symbol << 8) as u16
         ));
         DElt.nbBits = nbBits.wrapping_add(consumed) as u8;
         DElt.length = 2;
-        for i in start..start + length {
-            DTable[i as usize] = DElt;
-        }
+        DTable[start as usize..][..length as usize].fill(DElt);
         rankVal[weight as usize] += length;
     }
 }
@@ -1080,10 +1055,7 @@ fn HUFv07_fillDTableX4(
         let length = (1 << targetLog.wrapping_sub(nbBits)) as u32;
         if targetLog.wrapping_sub(nbBits) >= minBits {
             let mut sortedRank: u32 = 0;
-            let mut minWeight = nbBits.wrapping_add(scaleLog as u32) as core::ffi::c_int;
-            if minWeight < 1 {
-                minWeight = 1;
-            }
+            let minWeight = Ord::max(nbBits.wrapping_add(scaleLog as u32) as core::ffi::c_int, 1);
             sortedRank = rankStart[minWeight as usize];
             HUFv07_fillDTableX4Level2(
                 &mut DTable[start as usize..],
@@ -1101,12 +1073,7 @@ fn HUFv07_fillDTableX4(
                 nbBits: nbBits as u8,
                 length: 1,
             };
-            let end = start.wrapping_add(length);
-            let mut u = start;
-            while u < end {
-                DTable[u as usize] = DElt;
-                u = u.wrapping_add(1);
-            }
+            DTable[start as usize..][..length as usize].fill(DElt);
         }
         rankVal[weight as usize] += length;
     }
@@ -1212,9 +1179,7 @@ fn HUFv07_decodeLastSymbolX4(
         DStream.skip_bits(dt[val].nbBits as u32);
     } else if DStream.bitsConsumed < usize::BITS {
         DStream.skip_bits(dt[val].nbBits as u32);
-        if DStream.bitsConsumed > usize::BITS {
-            DStream.bitsConsumed = usize::BITS;
-        }
+        DStream.bitsConsumed = Ord::min(DStream.bitsConsumed, usize::BITS);
     }
 }
 #[inline]
@@ -1727,7 +1692,7 @@ pub(crate) fn ZSTDv07_getFrameParams(
         {
             return Err(Error::frameParameter_unsupported);
         }
-        windowSize = (1) << windowLog;
+        windowSize = 1 << windowLog;
         windowSize =
             windowSize.wrapping_add((windowSize >> 3) * (wlByte as core::ffi::c_int & 7) as u32);
     }
@@ -2143,7 +2108,7 @@ fn ZSTDv07_decodeSequence(seqState: &mut seqState_t) -> seq_t {
         }
     }
     if ofCode <= 1 {
-        if (llCode == 0) as core::ffi::c_int & (offset <= 1) as core::ffi::c_int != 0 {
+        if (llCode == 0) && (offset <= 1) {
             offset = 1_usize.wrapping_sub(offset);
         }
         if offset != 0 {
@@ -2427,7 +2392,7 @@ fn ZSTDv07_decompressFrame(
         };
         if dctx.fParams.checksumFlag != 0 {
             ZSTD_XXH64_update_slice(&mut dctx.xxhState, unsafe {
-                op.subslice(..decodedSize as usize).as_slice()
+                op.subslice(..decodedSize).as_slice()
             });
         }
         op = op.subslice(decodedSize..);
@@ -2598,10 +2563,7 @@ unsafe fn ZSTDv07_decompressContinue(
             let rSize = rSize?;
             dctx.previousDstEnd = dst.as_ptr().add(rSize);
             if dctx.fParams.checksumFlag != 0 {
-                ZSTD_XXH64_update_slice(
-                    &mut dctx.xxhState,
-                    dst.subslice(..rSize as usize).as_slice(),
-                );
+                ZSTD_XXH64_update_slice(&mut dctx.xxhState, dst.subslice(..rSize).as_slice());
             }
             return Ok(rSize);
         }

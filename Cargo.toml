@@ -5,15 +5,28 @@ exclude = [ "fuzz" ]
 
 [workspace.package]
 edition = "2021"
+rust-version = "1.95" # MSRV
 
 [package]
 name = "libzstd-rs-sys"
-version = "0.0.0"
+version = "0.0.1-prerelease.2"
+repository = "https://github.com/trifectatechfoundation/libzstd-rs-sys"
 description = "a rust implementation of zstd compression and decompression"
 license = "BSD-3-Clause"
 publish = true
-edition = "2021"
+edition.workspace = true
+rust-version.workspace = true
 autobins = false
+include = [
+    "Cargo.toml",
+    "README.md",
+    "LICENSE",
+    "*.rs",
+    "lib/**/*.rs",
+    "lib/common/portability_macros.h",
+    "zstd.h",
+    "lib/decompress/huf_decompress_amd64.S",
+]
 
 [lib]
 name = "libzstd_rs_sys"
@@ -45,6 +58,7 @@ features = ["xxh64", "xxh32"]
 [features]
 default = ["rust-allocator"]
 export-symbols = [] # whether the zlib api symbols are publicly exported
+custom-prefix = ["export-symbols"] # use the LIBZSTD_RS_SYS_PREFIX to prefix all exported symbols
 semver-prefix = ["export-symbols"] # prefix all symbols in a semver-compatible way
 no-prefetch = [] # do not prefetch
 trace = []

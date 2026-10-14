@@ -9,7 +9,7 @@ use libc::{
 use libzstd_rs_sys::internal::{
     POOL_add, POOL_create, POOL_ctx, POOL_free, POOL_function, POOL_joinJobs,
 };
-use libzstd_rs_sys::ZSTD_ParamSwitch_e;
+use libzstd_rs_sys::ParamSwitch;
 
 use crate::fileio::g_display_prefs;
 
@@ -56,7 +56,7 @@ pub struct FIO_prefs_s {
     pub targetCBlockSize: size_t,
     pub srcSizeHint: core::ffi::c_int,
     pub testMode: core::ffi::c_int,
-    pub literalCompressionMode: ZSTD_ParamSwitch_e,
+    pub literalCompressionMode: ParamSwitch,
     pub removeSrcFile: core::ffi::c_int,
     pub overwrite: core::ffi::c_int,
     pub asyncIO: core::ffi::c_int,
@@ -67,7 +67,7 @@ pub struct FIO_prefs_s {
     pub contentSize: core::ffi::c_int,
     pub allowBlockDevices: core::ffi::c_int,
     pub passThrough: core::ffi::c_int,
-    pub mmapDict: ZSTD_ParamSwitch_e,
+    pub mmapDict: ParamSwitch,
 }
 pub type FIO_prefs_t = FIO_prefs_s;
 #[derive(Copy, Clone)]
@@ -117,8 +117,8 @@ pub struct IOJob_t {
 }
 pub const SEEK_CUR: core::ffi::c_int = 1;
 pub const MAX_IO_JOBS: core::ffi::c_int = 10;
-static segmentSizeT: usize = 32usize * (1 << 10) / ::core::mem::size_of::<size_t>();
-static maskT: usize = ::core::mem::size_of::<size_t>() - 1;
+static segmentSizeT: usize = 32usize * (1 << 10) / size_of::<size_t>();
+static maskT: usize = size_of::<size_t>() - 1;
 unsafe fn AIO_fwriteSparse(
     file: *mut FILE,
     buffer: *const core::ffi::c_void,
@@ -127,7 +127,7 @@ unsafe fn AIO_fwriteSparse(
     mut storedSkips: core::ffi::c_uint,
 ) -> core::ffi::c_uint {
     let bufferT = buffer as *const size_t;
-    let mut bufferSizeT = bufferSize.wrapping_div(::core::mem::size_of::<size_t>());
+    let mut bufferSizeT = bufferSize.wrapping_div(size_of::<size_t>());
     let bufferTEnd = bufferT.add(bufferSizeT);
     let mut ptrT = bufferT;
     if (*prefs).testMode != 0 {
@@ -137,22 +137,18 @@ unsafe fn AIO_fwriteSparse(
         let sizeCheck = fwrite(buffer, 1, bufferSize, file);
         if sizeCheck != bufferSize {
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c"zstd: ".as_ptr());
             }
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"fileio_asyncio.c\0" as *const u8 as *const core::ffi::c_char,
+                    c"Error defined at %s, line %i : \n".as_ptr(),
+                    c"fileio_asyncio.c".as_ptr(),
                     50,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                    70,
-                );
+                fprintf(stderr, c"error %i : ".as_ptr(), 70);
             }
             if g_display_prefs.displayLevel >= 1 {
                 eprintln!(
@@ -173,32 +169,24 @@ unsafe fn AIO_fwriteSparse(
         ) != 0
         {
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c"zstd: ".as_ptr());
             }
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"fileio_asyncio.c\0" as *const u8 as *const core::ffi::c_char,
+                    c"Error defined at %s, line %i : \n".as_ptr(),
+                    c"fileio_asyncio.c".as_ptr(),
                     57,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                    91,
-                );
+                fprintf(stderr, c"error %i : ".as_ptr(), 91);
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"1 GB skip error (sparse file support)\0" as *const u8
-                        as *const core::ffi::c_char,
-                );
+                fprintf(stderr, c"1 GB skip error (sparse file support)".as_ptr());
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c" \n".as_ptr());
             }
             exit(91);
         }
@@ -207,77 +195,60 @@ unsafe fn AIO_fwriteSparse(
     }
     while ptrT < bufferTEnd {
         let mut nb0T: size_t = 0;
-        let mut seg0SizeT = segmentSizeT;
-        if seg0SizeT > bufferSizeT {
-            seg0SizeT = bufferSizeT;
-        }
+        let seg0SizeT = Ord::min(segmentSizeT, bufferSizeT);
         bufferSizeT = bufferSizeT.wrapping_sub(seg0SizeT);
         nb0T = 0;
         while nb0T < seg0SizeT && *ptrT.add(nb0T) == 0 {
             nb0T = nb0T.wrapping_add(1);
         }
-        storedSkips = storedSkips
-            .wrapping_add(nb0T.wrapping_mul(::core::mem::size_of::<size_t>()) as core::ffi::c_uint);
+        storedSkips =
+            storedSkips.wrapping_add(nb0T.wrapping_mul(size_of::<size_t>()) as core::ffi::c_uint);
         if nb0T != seg0SizeT {
             let nbNon0ST = seg0SizeT.wrapping_sub(nb0T);
             if fseek(file, storedSkips as core::ffi::c_long, SEEK_CUR) != 0 {
                 if g_display_prefs.displayLevel >= 1 {
-                    fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                    fprintf(stderr, c"zstd: ".as_ptr());
                 }
                 if g_display_prefs.displayLevel >= 5 {
                     fprintf(
                         stderr,
-                        b"Error defined at %s, line %i : \n\0" as *const u8
-                            as *const core::ffi::c_char,
-                        b"fileio_asyncio.c\0" as *const u8 as *const core::ffi::c_char,
+                        c"Error defined at %s, line %i : \n".as_ptr(),
+                        c"fileio_asyncio.c".as_ptr(),
                         77,
                     );
                 }
                 if g_display_prefs.displayLevel >= 1 {
-                    fprintf(
-                        stderr,
-                        b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                        92,
-                    );
+                    fprintf(stderr, c"error %i : ".as_ptr(), 92);
                 }
                 if g_display_prefs.displayLevel >= 1 {
-                    fprintf(
-                        stderr,
-                        b"Sparse skip error ; try --no-sparse\0" as *const u8
-                            as *const core::ffi::c_char,
-                    );
+                    fprintf(stderr, c"Sparse skip error ; try --no-sparse".as_ptr());
                 }
                 if g_display_prefs.displayLevel >= 1 {
-                    fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                    fprintf(stderr, c" \n".as_ptr());
                 }
                 exit(92);
             }
             storedSkips = 0;
             if fwrite(
                 ptrT.add(nb0T) as *const core::ffi::c_void,
-                ::core::mem::size_of::<size_t>(),
+                size_of::<size_t>(),
                 nbNon0ST,
                 file,
             ) != nbNon0ST
             {
                 if g_display_prefs.displayLevel >= 1 {
-                    fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                    fprintf(stderr, c"zstd: ".as_ptr());
                 }
                 if g_display_prefs.displayLevel >= 5 {
                     fprintf(
                         stderr,
-                        b"Error defined at %s, line %i : \n\0" as *const u8
-                            as *const core::ffi::c_char,
-                        b"fileio_asyncio.c\0" as *const u8 as *const core::ffi::c_char,
+                        c"Error defined at %s, line %i : \n".as_ptr(),
+                        c"fileio_asyncio.c".as_ptr(),
                         82,
                     );
                 }
                 if g_display_prefs.displayLevel >= 1 {
-                    fprintf(
-                        stderr,
-                        b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                        93,
-                    );
+                    fprintf(stderr, c"error %i : ".as_ptr(), 93);
                 }
                 if g_display_prefs.displayLevel >= 1 {
                     eprintln!(
@@ -294,7 +265,7 @@ unsafe fn AIO_fwriteSparse(
         let restStart = bufferTEnd as *const core::ffi::c_char;
         let mut restPtr = restStart;
         let restEnd = (buffer as *const core::ffi::c_char).add(bufferSize);
-        assert!(restEnd > restStart && restEnd < restStart.add(::core::mem::size_of::<size_t>()));
+        assert!(restEnd > restStart && restEnd < restStart.add(size_of::<size_t>()));
         while restPtr < restEnd && *restPtr as core::ffi::c_int == 0 {
             restPtr = restPtr.offset(1);
         }
@@ -304,55 +275,41 @@ unsafe fn AIO_fwriteSparse(
             let restSize = restEnd.offset_from(restPtr) as size_t;
             if fseek(file, storedSkips as core::ffi::c_long, SEEK_CUR) != 0 {
                 if g_display_prefs.displayLevel >= 1 {
-                    fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                    fprintf(stderr, c"zstd: ".as_ptr());
                 }
                 if g_display_prefs.displayLevel >= 5 {
                     fprintf(
                         stderr,
-                        b"Error defined at %s, line %i : \n\0" as *const u8
-                            as *const core::ffi::c_char,
-                        b"fileio_asyncio.c\0" as *const u8 as *const core::ffi::c_char,
+                        c"Error defined at %s, line %i : \n".as_ptr(),
+                        c"fileio_asyncio.c".as_ptr(),
                         100,
                     );
                 }
                 if g_display_prefs.displayLevel >= 1 {
-                    fprintf(
-                        stderr,
-                        b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                        92,
-                    );
+                    fprintf(stderr, c"error %i : ".as_ptr(), 92);
                 }
                 if g_display_prefs.displayLevel >= 1 {
-                    fprintf(
-                        stderr,
-                        b"Sparse skip error ; try --no-sparse\0" as *const u8
-                            as *const core::ffi::c_char,
-                    );
+                    fprintf(stderr, c"Sparse skip error ; try --no-sparse".as_ptr());
                 }
                 if g_display_prefs.displayLevel >= 1 {
-                    fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                    fprintf(stderr, c" \n".as_ptr());
                 }
                 exit(92);
             }
             if fwrite(restPtr as *const core::ffi::c_void, 1, restSize, file) != restSize {
                 if g_display_prefs.displayLevel >= 1 {
-                    fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                    fprintf(stderr, c"zstd: ".as_ptr());
                 }
                 if g_display_prefs.displayLevel >= 5 {
                     fprintf(
                         stderr,
-                        b"Error defined at %s, line %i : \n\0" as *const u8
-                            as *const core::ffi::c_char,
-                        b"fileio_asyncio.c\0" as *const u8 as *const core::ffi::c_char,
+                        c"Error defined at %s, line %i : \n".as_ptr(),
+                        c"fileio_asyncio.c".as_ptr(),
                         103,
                     );
                 }
                 if g_display_prefs.displayLevel >= 1 {
-                    fprintf(
-                        stderr,
-                        b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                        95,
-                    );
+                    fprintf(stderr, c"error %i : ".as_ptr(), 95);
                 }
                 if g_display_prefs.displayLevel >= 1 {
                     eprintln!(
@@ -373,7 +330,7 @@ unsafe fn AIO_fwriteSparseEnd(
     storedSkips: core::ffi::c_uint,
 ) {
     if (*prefs).testMode != 0 {
-        assert!(storedSkips == 0);
+        assert_eq!(storedSkips, 0);
     }
     if storedSkips > 0 {
         assert!((*prefs).sparseFileSupport > 0);
@@ -384,32 +341,24 @@ unsafe fn AIO_fwriteSparseEnd(
         ) != 0
         {
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c"zstd: ".as_ptr());
             }
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"fileio_asyncio.c\0" as *const u8 as *const core::ffi::c_char,
+                    c"Error defined at %s, line %i : \n".as_ptr(),
+                    c"fileio_asyncio.c".as_ptr(),
                     118,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                    69,
-                );
+                fprintf(stderr, c"error %i : ".as_ptr(), 69);
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"Final skip error (sparse file support)\0" as *const u8
-                        as *const core::ffi::c_char,
-                );
+                fprintf(stderr, c"Final skip error (sparse file support)".as_ptr());
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c" \n".as_ptr());
             }
             exit(69);
         }
@@ -422,22 +371,18 @@ unsafe fn AIO_fwriteSparseEnd(
         ) != 1
         {
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c"zstd: ".as_ptr());
             }
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"fileio_asyncio.c\0" as *const u8 as *const core::ffi::c_char,
+                    c"Error defined at %s, line %i : \n".as_ptr(),
+                    c"fileio_asyncio.c".as_ptr(),
                     123,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                    69,
-                );
+                fprintf(stderr, c"error %i : ".as_ptr(), 69);
             }
             if g_display_prefs.displayLevel >= 1 {
                 eprintln!(
@@ -453,35 +398,28 @@ pub unsafe fn AIO_supported() -> core::ffi::c_int {
     1
 }
 unsafe fn AIO_IOPool_createIoJob(ctx: *mut IOPoolCtx_t, bufferSize: size_t) -> *mut IOJob_t {
-    let job = malloc(::core::mem::size_of::<IOJob_t>()) as *mut IOJob_t;
+    let job = malloc(size_of::<IOJob_t>()) as *mut IOJob_t;
     let buffer = malloc(bufferSize);
     if job.is_null() || buffer.is_null() {
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio_asyncio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio_asyncio.c".as_ptr(),
                 150,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                101,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 101);
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"Allocation error : not enough memory\0" as *const u8 as *const core::ffi::c_char,
-            );
+            fprintf(stderr, c"Allocation error : not enough memory".as_ptr());
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(101);
     }
@@ -503,64 +441,50 @@ unsafe fn AIO_IOPool_createThreadPool(ctx: *mut IOPoolCtx_t, prefs: *const FIO_p
         ) != 0
         {
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c"zstd: ".as_ptr());
             }
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"fileio_asyncio.c\0" as *const u8 as *const core::ffi::c_char,
+                    c"Error defined at %s, line %i : \n".as_ptr(),
+                    c"fileio_asyncio.c".as_ptr(),
                     169,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                    102,
-                );
+                fprintf(stderr, c"error %i : ".as_ptr(), 102);
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"Failed creating ioJobsMutex mutex\0" as *const u8 as *const core::ffi::c_char,
-                );
+                fprintf(stderr, c"Failed creating ioJobsMutex mutex".as_ptr());
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c" \n".as_ptr());
             }
             exit(102);
         }
-        assert!(MAX_IO_JOBS >= 2);
+        const { assert!(MAX_IO_JOBS >= 2) };
         (*ctx).threadPool = POOL_create(1, (MAX_IO_JOBS - 2) as size_t);
         (*ctx).threadPoolActive = 1;
         if ((*ctx).threadPool).is_null() {
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c"zstd: ".as_ptr());
             }
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"fileio_asyncio.c\0" as *const u8 as *const core::ffi::c_char,
+                    c"Error defined at %s, line %i : \n".as_ptr(),
+                    c"fileio_asyncio.c".as_ptr(),
                     176,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                    104,
-                );
+                fprintf(stderr, c"error %i : ".as_ptr(), 104);
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"Failed creating I/O thread pool\0" as *const u8 as *const core::ffi::c_char,
-                );
+                fprintf(stderr, c"Failed creating I/O thread pool".as_ptr());
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c" \n".as_ptr());
             }
             exit(104);
         }
@@ -631,7 +555,7 @@ unsafe fn AIO_IOPool_destroy(ctx: *mut IOPoolCtx_t) {
     let mut i: core::ffi::c_int = 0;
     if !((*ctx).threadPool).is_null() {
         AIO_IOPool_join(ctx);
-        assert!((*ctx).availableJobsCount == (*ctx).totalIoJobs);
+        assert_eq!((*ctx).availableJobsCount, (*ctx).totalIoJobs);
         POOL_free((*ctx).threadPool);
         pthread_mutex_destroy(&mut (*ctx).ioJobsMutex);
     }
@@ -662,7 +586,7 @@ unsafe fn AIO_IOPool_acquireJob(ctx: *mut IOPoolCtx_t) -> *mut IOJob_t {
 unsafe fn AIO_IOPool_setFile(ctx: *mut IOPoolCtx_t, file: *mut FILE) {
     assert!(!ctx.is_null());
     AIO_IOPool_join(ctx);
-    assert!((*ctx).availableJobsCount == (*ctx).totalIoJobs);
+    assert_eq!((*ctx).availableJobsCount, (*ctx).totalIoJobs);
     (*ctx).file = file;
 }
 unsafe fn AIO_IOPool_getFile(ctx: *const IOPoolCtx_t) -> *mut FILE {
@@ -695,7 +619,7 @@ pub unsafe fn AIO_WritePool_sparseWriteEnd(ctx: *mut WritePoolCtx_t) {
 }
 pub unsafe fn AIO_WritePool_setFile(ctx: *mut WritePoolCtx_t, file: *mut FILE) {
     AIO_IOPool_setFile(&mut (*ctx).base, file);
-    assert!((*ctx).storedSkips == 0);
+    assert_eq!((*ctx).storedSkips, 0);
 }
 pub unsafe fn AIO_WritePool_getFile(ctx: *const WritePoolCtx_t) -> *mut FILE {
     AIO_IOPool_getFile(&(*ctx).base)
@@ -726,34 +650,27 @@ pub unsafe fn AIO_WritePool_create(
     prefs: *const FIO_prefs_t,
     bufferSize: size_t,
 ) -> *mut WritePoolCtx_t {
-    let ctx = malloc(::core::mem::size_of::<WritePoolCtx_t>()) as *mut WritePoolCtx_t;
+    let ctx = malloc(size_of::<WritePoolCtx_t>()) as *mut WritePoolCtx_t;
     if ctx.is_null() {
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio_asyncio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio_asyncio.c".as_ptr(),
                 384,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                100,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 100);
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"Allocation error : not enough memory\0" as *const u8 as *const core::ffi::c_char,
-            );
+            fprintf(stderr, c"Allocation error : not enough memory".as_ptr());
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(100);
     }
@@ -771,7 +688,7 @@ pub unsafe fn AIO_WritePool_free(ctx: *mut WritePoolCtx_t) {
         AIO_WritePool_closeFile(ctx);
     }
     AIO_IOPool_destroy(&mut (*ctx).base);
-    assert!((*ctx).storedSkips == 0);
+    assert_eq!((*ctx).storedSkips, 0);
     free(ctx as *mut core::ffi::c_void);
 }
 pub unsafe fn AIO_WritePool_setAsync(ctx: *mut WritePoolCtx_t, async_0: core::ffi::c_int) {
@@ -835,7 +752,7 @@ unsafe fn AIO_ReadPool_getNextCompletedJob(ctx: *mut ReadPoolCtx_t) -> *mut IOJo
         job = AIO_ReadPool_findNextWaitingOffsetCompletedJob_locked(ctx);
     }
     if !job.is_null() {
-        assert!((*job).offset == (*ctx).waitingOnOffset);
+        assert_eq!((*job).offset, (*ctx).waitingOnOffset);
         (*ctx).waitingOnOffset = (*ctx)
             .waitingOnOffset
             .wrapping_add((*job).usedBufferSize as u64);
@@ -855,62 +772,48 @@ unsafe fn AIO_ReadPool_executeReadJob(opaque: *mut core::ffi::c_void) {
     if (*job).usedBufferSize < (*job).bufferSize {
         if ferror((*job).file) != 0 {
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c"zstd: ".as_ptr());
             }
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"fileio_asyncio.c\0" as *const u8 as *const core::ffi::c_char,
+                    c"Error defined at %s, line %i : \n".as_ptr(),
+                    c"fileio_asyncio.c".as_ptr(),
                     499,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                    37,
-                );
+                fprintf(stderr, c"error %i : ".as_ptr(), 37);
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"Read error\0" as *const u8 as *const core::ffi::c_char,
-                );
+                fprintf(stderr, c"Read error".as_ptr());
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c" \n".as_ptr());
             }
             exit(37);
         } else if feof((*job).file) != 0 {
             (*ctx).reachedEof = 1;
         } else {
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c"zstd: ".as_ptr());
             }
             if g_display_prefs.displayLevel >= 5 {
                 fprintf(
                     stderr,
-                    b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                    b"fileio_asyncio.c\0" as *const u8 as *const core::ffi::c_char,
+                    c"Error defined at %s, line %i : \n".as_ptr(),
+                    c"fileio_asyncio.c".as_ptr(),
                     503,
                 );
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                    37,
-                );
+                fprintf(stderr, c"error %i : ".as_ptr(), 37);
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(
-                    stderr,
-                    b"Unexpected short read\0" as *const u8 as *const core::ffi::c_char,
-                );
+                fprintf(stderr, c"Unexpected short read".as_ptr());
             }
             if g_display_prefs.displayLevel >= 1 {
-                fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+                fprintf(stderr, c" \n".as_ptr());
             }
             exit(37);
         }
@@ -951,34 +854,27 @@ pub unsafe fn AIO_ReadPool_create(
     prefs: *const FIO_prefs_t,
     bufferSize: size_t,
 ) -> *mut ReadPoolCtx_t {
-    let ctx = malloc(::core::mem::size_of::<ReadPoolCtx_t>()) as *mut ReadPoolCtx_t;
+    let ctx = malloc(size_of::<ReadPoolCtx_t>()) as *mut ReadPoolCtx_t;
     if ctx.is_null() {
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio_asyncio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio_asyncio.c".as_ptr(),
                 549,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                100,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 100);
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"Allocation error : not enough memory\0" as *const u8 as *const core::ffi::c_char,
-            );
+            fprintf(stderr, c"Allocation error : not enough memory".as_ptr());
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(100);
     }
@@ -991,31 +887,24 @@ pub unsafe fn AIO_ReadPool_create(
     (*ctx).coalesceBuffer = malloc(bufferSize * 2) as *mut u8;
     if ((*ctx).coalesceBuffer).is_null() {
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio_asyncio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio_asyncio.c".as_ptr(),
                 553,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                100,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 100);
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"Allocation error : not enough memory\0" as *const u8 as *const core::ffi::c_char,
-            );
+            fprintf(stderr, c"Allocation error : not enough memory".as_ptr());
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(100);
     }
@@ -1030,31 +919,24 @@ pub unsafe fn AIO_ReadPool_create(
         ) != 0
     {
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b"zstd: \0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"zstd: ".as_ptr());
         }
         if g_display_prefs.displayLevel >= 5 {
             fprintf(
                 stderr,
-                b"Error defined at %s, line %i : \n\0" as *const u8 as *const core::ffi::c_char,
-                b"fileio_asyncio.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error defined at %s, line %i : \n".as_ptr(),
+                c"fileio_asyncio.c".as_ptr(),
                 561,
             );
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"error %i : \0" as *const u8 as *const core::ffi::c_char,
-                103,
-            );
+            fprintf(stderr, c"error %i : ".as_ptr(), 103);
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(
-                stderr,
-                b"Failed creating jobCompletedCond cond\0" as *const u8 as *const core::ffi::c_char,
-            );
+            fprintf(stderr, c"Failed creating jobCompletedCond cond".as_ptr());
         }
         if g_display_prefs.displayLevel >= 1 {
-            fprintf(stderr, b" \n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c" \n".as_ptr());
         }
         exit(103);
     }
@@ -1088,9 +970,7 @@ unsafe fn AIO_ReadPool_releaseCurrentHeldAndGetNext(ctx: *mut ReadPoolCtx_t) -> 
 pub unsafe fn AIO_ReadPool_fillBuffer(ctx: *mut ReadPoolCtx_t, mut n: size_t) -> size_t {
     let mut job = core::ptr::null_mut::<IOJob_t>();
     let mut useCoalesce = 0;
-    if n > (*ctx).base.jobBufferSize {
-        n = (*ctx).base.jobBufferSize;
-    }
+    n = Ord::min(n, (*ctx).base.jobBufferSize);
     if (*ctx).srcBufferLoaded >= n {
         return 0;
     }

@@ -5,7 +5,7 @@ use core::ptr::{self, NonNull};
 use libc::size_t;
 
 use crate::lib::common::allocations::{ZSTD_customCalloc, ZSTD_customFree, ZSTD_customMalloc};
-use crate::lib::common::entropy_common::FSE_readNCount_slice;
+use crate::lib::common::entropy_common::FSE_readNCount;
 use crate::lib::common::error_private::{ERR_isError, Error};
 use crate::lib::common::mem::MEM_readLE32;
 use crate::lib::common::reader::Reader;
@@ -13,8 +13,8 @@ use crate::lib::common::xxhash::{
     ZSTD_XXH64_digest, ZSTD_XXH64_reset, ZSTD_XXH64_slice, ZSTD_XXH64_update_slice,
 };
 use crate::lib::common::zstd_internal::{
-    repStartValue, LL_bits, ML_bits, MaxLL, MaxML, MaxOff, ZSTD_blockHeaderSize,
-    ZSTD_cpuSupportsBmi2, ZSTD_limitCopy, WILDCOPY_OVERLENGTH, ZSTD_FRAMEIDSIZE,
+    repStartValue, BlockType, LL_bits, ML_bits, MaxLL, MaxML, MaxOff, ZSTD_cpuSupportsBmi2,
+    ZSTD_limitCopy, WILDCOPY_OVERLENGTH, ZSTD_BLOCKHEADERSIZE, ZSTD_FRAMEIDSIZE,
     ZSTD_WORKSPACETOOLARGE_FACTOR, ZSTD_WORKSPACETOOLARGE_MAXDURATION,
 };
 use crate::lib::decompress::huf_decompress::{
@@ -26,15 +26,14 @@ use crate::lib::decompress::zstd_decompress_block::{
     ZSTD_decompressBlock_internal_help, ZSTD_getcBlockSize,
 };
 use crate::lib::decompress::{
-    blockProperties_t, BlockType, DecompressStage, DictUses, LL_base, ML_base, NextInputType,
-    OF_base, OF_bits, StreamStage, ZSTD_DCtx, ZSTD_DCtx_s, ZSTD_FrameHeader, ZSTD_entropyDTables_t,
+    blockProperties_t, DecompressStage, DictUses, LL_base, ML_base, NextInputType, OF_base,
+    OF_bits, StreamStage, ZSTD_DCtx, ZSTD_DCtx_s, ZSTD_FrameHeader, ZSTD_entropyDTables_t,
     ZSTD_frame, ZSTD_skippableFrame,
 };
-use crate::lib::zstd::experimental::ZSTD_FRAMEHEADERSIZE_MIN;
 use crate::lib::zstd::{
     BufferMode, ForceIgnoreChecksum, Format, ZSTD_ResetDirective, ZSTD_customMem, ZSTD_dParameter,
     ZSTD_dct_auto, ZSTD_dct_rawContent, ZSTD_dictContentType_e, ZSTD_dictLoadMethod_e,
-    ZSTD_dlm_byCopy, ZSTD_dlm_byRef, ZSTD_format_e, ZSTD_inBuffer, ZSTD_inBuffer_s,
+    ZSTD_dlm_byCopy, ZSTD_dlm_byRef, ZSTD_format_e, ZSTD_inBuffer, ZSTD_inBuffer_s, ZSTD_outBuffer,
     ZSTD_outBuffer_s, ZSTD_BLOCKSIZE_MAX, ZSTD_BLOCKSIZE_MAX_MIN, ZSTD_CONTENTSIZE_ERROR,
     ZSTD_CONTENTSIZE_UNKNOWN, ZSTD_MAGICNUMBER, ZSTD_MAGIC_DICTIONARY, ZSTD_MAGIC_SKIPPABLE_MASK,
     ZSTD_MAGIC_SKIPPABLE_START, ZSTD_SKIPPABLEHEADERSIZE, ZSTD_VERSION_NUMBER,
@@ -48,7 +47,7 @@ use crate::lib::common::zstd_trace::{
 use crate::lib::legacy::zstd_v05::{
     ZBUFFv05_DCtx, ZBUFFv05_createDCtx, ZBUFFv05_decompressContinue,
     ZBUFFv05_decompressInitDictionary, ZBUFFv05_freeDCtx, ZSTDv05_createDCtx,
-    ZSTDv05_decompress_usingDict, ZSTDv05_fast, ZSTDv05_findFrameSizeInfoLegacy, ZSTDv05_freeDCtx,
+    ZSTDv05_decompress_usingDict, ZSTDv05_findFrameSizeInfoLegacy, ZSTDv05_freeDCtx,
     ZSTDv05_getFrameParams, ZSTDv05_parameters,
 };
 use crate::lib::legacy::zstd_v06::{
@@ -70,9 +69,11 @@ use crate::lib::decompress::zstd_ddict::{
 };
 
 #[cfg(doc)]
-use crate::ZSTD_isError;
+use crate::{
+    lib::zstd::ZSTD_error_memory_allocation, ZSTD_compress, ZSTD_compressCCtx,
+    ZSTD_compress_usingCDict, ZSTD_compress_usingDict, ZSTD_isError, ZSTD_FRAMEHEADERSIZE_MAX,
+};
 
-pub type ZSTD_outBuffer = ZSTD_outBuffer_s;
 #[repr(C)]
 pub struct ZSTD_cpuid_t {
     pub f1c: u32,
@@ -82,9 +83,6 @@ pub struct ZSTD_cpuid_t {
 }
 type ZBUFFv07_DCtx = ZBUFFv07_DCtx_s;
 type ZBUFFv06_DCtx = ZBUFFv06_DCtx_s;
-type XXH_errorcode = core::ffi::c_uint;
-pub const XXH_ERROR: XXH_errorcode = 1;
-pub const XXH_OK: XXH_errorcode = 0;
 
 #[derive(Default)]
 #[repr(C)]
@@ -147,28 +145,14 @@ fn get_decompressed_size_legacy(src: &[u8]) -> Option<u64> {
 
     match is_legacy(src) {
         5 => {
-            let mut fParams = ZSTDv05_parameters {
-                srcSize: 0,
-                windowLog: 0,
-                contentLog: 0,
-                hashLog: 0,
-                searchLog: 0,
-                searchLength: 0,
-                targetLength: 0,
-                strategy: ZSTDv05_fast,
-            };
-
+            let mut fParams = ZSTDv05_parameters::default();
             match ZSTDv05_getFrameParams(&mut fParams, src) {
                 Ok(0) => Some(fParams.srcSize as core::ffi::c_ulonglong),
                 _ => None,
             }
         }
         6 => {
-            let mut fParams = ZSTDv06_frameParams_s {
-                frameContentSize: 0,
-                windowLog: 0,
-            };
-
+            let mut fParams = ZSTDv06_frameParams_s::default();
             match unsafe { ZSTDv06_getFrameParams(&mut fParams, ptr, src.len() as _) } {
                 0 => Some(fParams.frameContentSize),
                 _ => None,
@@ -222,12 +206,11 @@ fn ZSTD_decompressLegacy(
                 src.as_ptr() as *const core::ffi::c_void
             };
 
-            let mut result: size_t = 0;
             let zd = unsafe { ZSTDv06_createDCtx() };
             if zd.is_null() {
                 return Err(Error::memory_allocation);
             }
-            result = unsafe {
+            let result = unsafe {
                 ZSTDv06_decompress_usingDict(
                     zd,
                     dst,
@@ -330,6 +313,7 @@ unsafe fn ZSTD_freeLegacyStreamContext(
         _ => Error::version_unsupported.to_error_code(),
     }
 }
+
 #[inline]
 unsafe fn ZSTD_initLegacyStream(
     legacyContext: *mut *mut core::ffi::c_void,
@@ -337,7 +321,7 @@ unsafe fn ZSTD_initLegacyStream(
     newVersion: u32,
     mut dict: *const core::ffi::c_void,
     dictSize: size_t,
-) -> size_t {
+) -> Result<(), Error> {
     let mut x: core::ffi::c_char = 0;
     if dict.is_null() {
         dict = &mut x as *mut core::ffi::c_char as *const core::ffi::c_void;
@@ -353,7 +337,7 @@ unsafe fn ZSTD_initLegacyStream(
                 *legacyContext as *mut ZBUFFv05_DCtx
             };
             if dctx.is_null() {
-                return Error::memory_allocation.to_error_code();
+                return Err(Error::memory_allocation);
             }
             let _ = ZBUFFv05_decompressInitDictionary(
                 dctx,
@@ -364,7 +348,6 @@ unsafe fn ZSTD_initLegacyStream(
                 },
             );
             *legacyContext = dctx as *mut core::ffi::c_void;
-            0
         }
         6 => {
             let dctx = if prevVersion != newVersion {
@@ -373,11 +356,10 @@ unsafe fn ZSTD_initLegacyStream(
                 *legacyContext as *mut ZBUFFv06_DCtx
             };
             if dctx.is_null() {
-                return Error::memory_allocation.to_error_code();
+                return Err(Error::memory_allocation);
             }
             ZBUFFv06_decompressInitDictionary(dctx, dict, dictSize);
             *legacyContext = dctx as *mut core::ffi::c_void;
-            0
         }
         7 => {
             let dctx = if prevVersion != newVersion {
@@ -386,14 +368,14 @@ unsafe fn ZSTD_initLegacyStream(
                 *legacyContext as *mut ZBUFFv07_DCtx
             };
             if dctx.is_null() {
-                return Error::memory_allocation.to_error_code();
+                return Err(Error::memory_allocation);
             }
             let _ = ZBUFFv07_decompressInitDictionary(&mut *dctx, dict, dictSize);
             *legacyContext = dctx as *mut core::ffi::c_void;
-            0
         }
-        _ => 0,
+        _ => {}
     }
+    Ok(())
 }
 
 #[inline]
@@ -488,26 +470,24 @@ fn ZSTD_DDictHashSet_getIndex(hashSet: &ZSTD_DDictHashSet, dictID: u32) -> size_
 unsafe fn ZSTD_DDictHashSet_emplaceDDict(
     hashSet: &mut ZSTD_DDictHashSet,
     ddict: *const ZSTD_DDict,
-) -> size_t {
+) -> Result<(), Error> {
     let dictID = ZSTD_getDictID_fromDDict(ddict);
     let mut idx = ZSTD_DDictHashSet_getIndex(hashSet, dictID);
     let idxRangeMask = (hashSet.ddictPtrTableSize).wrapping_sub(1);
     if hashSet.ddictPtrCount == hashSet.ddictPtrTableSize {
-        return Error::GENERIC.to_error_code();
+        return Err(Error::GENERIC);
     }
     while !(*(hashSet.ddictPtrTable).add(idx)).is_null() {
         if ZSTD_getDictID_fromDDict(*(hashSet.ddictPtrTable).add(idx)) == dictID {
-            let fresh0 = &mut (*(hashSet.ddictPtrTable).add(idx));
-            *fresh0 = ddict;
-            return 0;
+            *(hashSet.ddictPtrTable).add(idx) = ddict;
+            return Ok(());
         }
         idx &= idxRangeMask;
         idx = idx.wrapping_add(1);
     }
-    let fresh1 = &mut (*(hashSet.ddictPtrTable).add(idx));
-    *fresh1 = ddict;
+    *(hashSet.ddictPtrTable).add(idx) = ddict;
     hashSet.ddictPtrCount = (hashSet.ddictPtrCount).wrapping_add(1);
-    0
+    Ok(())
 }
 
 /// Expands hash table by factor of [`DDICT_HASHSET_RESIZE_FACTOR`] and rehashes all values,
@@ -515,37 +495,31 @@ unsafe fn ZSTD_DDictHashSet_emplaceDDict(
 unsafe fn ZSTD_DDictHashSet_expand(
     hashSet: &mut ZSTD_DDictHashSet,
     customMem: ZSTD_customMem,
-) -> size_t {
+) -> Result<(), Error> {
     let newTableSize = hashSet.ddictPtrTableSize * DDICT_HASHSET_RESIZE_FACTOR as size_t;
     let newTable = ZSTD_customCalloc(
-        (::core::mem::size_of::<*mut ZSTD_DDict>()).wrapping_mul(newTableSize),
+        size_of::<*mut ZSTD_DDict>().wrapping_mul(newTableSize),
         customMem,
     ) as *mut *const ZSTD_DDict;
     let oldTable = hashSet.ddictPtrTable;
     let oldTableSize = hashSet.ddictPtrTableSize;
-    let mut i: size_t = 0;
     if newTable.is_null() {
-        return Error::memory_allocation.to_error_code();
+        return Err(Error::memory_allocation);
     }
     hashSet.ddictPtrTable = newTable;
     hashSet.ddictPtrTableSize = newTableSize;
     hashSet.ddictPtrCount = 0;
-    i = 0;
-    while i < oldTableSize {
+    for i in 0..oldTableSize {
         if !(*oldTable.add(i)).is_null() {
-            let err_code = ZSTD_DDictHashSet_emplaceDDict(hashSet, *oldTable.add(i));
-            if ERR_isError(err_code) {
-                return err_code;
-            }
+            ZSTD_DDictHashSet_emplaceDDict(hashSet, *oldTable.add(i))?;
         }
-        i = i.wrapping_add(1);
     }
     ZSTD_customFree(
         oldTable as *mut core::ffi::c_void,
-        oldTableSize.wrapping_mul(::core::mem::size_of::<*mut ZSTD_DDict>()),
+        oldTableSize.wrapping_mul(size_of::<*mut ZSTD_DDict>()),
         customMem,
     );
-    0
+    Ok(())
 }
 
 /// Fetches a [`ZSTD_DDict`] with the given `dictID`.
@@ -586,20 +560,19 @@ unsafe fn ZSTD_DDictHashSet_getDDict(
 ///   values automatically set to `NULL` to begin with.
 /// - `NULL` if allocation failed
 unsafe fn ZSTD_createDDictHashSet(customMem: ZSTD_customMem) -> *mut ZSTD_DDictHashSet {
-    let ret = ZSTD_customMalloc(::core::mem::size_of::<ZSTD_DDictHashSet>(), customMem)
-        as *mut ZSTD_DDictHashSet;
+    let ret =
+        ZSTD_customMalloc(size_of::<ZSTD_DDictHashSet>(), customMem) as *mut ZSTD_DDictHashSet;
     if ret.is_null() {
         return core::ptr::null_mut();
     }
     (*ret).ddictPtrTable = ZSTD_customCalloc(
-        (DDICT_HASHSET_TABLE_BASE_SIZE as size_t)
-            .wrapping_mul(::core::mem::size_of::<*mut ZSTD_DDict>()),
+        (DDICT_HASHSET_TABLE_BASE_SIZE as size_t).wrapping_mul(size_of::<*mut ZSTD_DDict>()),
         customMem,
     ) as *mut *const ZSTD_DDict;
     if ((*ret).ddictPtrTable).is_null() {
         ZSTD_customFree(
             ret as *mut core::ffi::c_void,
-            ::core::mem::size_of::<ZSTD_DDictHashSet>(),
+            size_of::<ZSTD_DDictHashSet>(),
             customMem,
         );
         return core::ptr::null_mut();
@@ -618,14 +591,14 @@ unsafe fn ZSTD_freeDDictHashSet(hashSet: *mut ZSTD_DDictHashSet, customMem: ZSTD
             (*hashSet).ddictPtrTable as *mut core::ffi::c_void,
             (*hashSet)
                 .ddictPtrTableSize
-                .wrapping_mul(::core::mem::size_of::<*mut ZSTD_DDict>()),
+                .wrapping_mul(size_of::<*mut ZSTD_DDict>()),
             customMem,
         );
     }
     if !hashSet.is_null() {
         ZSTD_customFree(
             hashSet as *mut core::ffi::c_void,
-            ::core::mem::size_of::<ZSTD_DDictHashSet>(),
+            size_of::<ZSTD_DDictHashSet>(),
             customMem,
         );
     }
@@ -636,22 +609,15 @@ unsafe fn ZSTD_DDictHashSet_addDDict(
     hashSet: &mut ZSTD_DDictHashSet,
     ddict: *const ZSTD_DDict,
     customMem: ZSTD_customMem,
-) -> size_t {
+) -> Result<(), Error> {
     if hashSet.ddictPtrCount * DDICT_HASHSET_MAX_LOAD_FACTOR_COUNT_MULT as size_t
         / hashSet.ddictPtrTableSize
         * DDICT_HASHSET_MAX_LOAD_FACTOR_SIZE_MULT as size_t
         != 0
     {
-        let err_code = ZSTD_DDictHashSet_expand(hashSet, customMem);
-        if ERR_isError(err_code) {
-            return err_code;
-        }
+        ZSTD_DDictHashSet_expand(hashSet, customMem)?;
     }
-    let err_code = ZSTD_DDictHashSet_emplaceDDict(hashSet, ddict);
-    if ERR_isError(err_code) {
-        return err_code;
-    }
-    0
+    ZSTD_DDictHashSet_emplaceDDict(hashSet, ddict)
 }
 
 /// Get the _current_ memory usage of the [`ZSTD_DCtx`]
@@ -665,7 +631,7 @@ pub unsafe extern "C" fn ZSTD_sizeof_DCtx(dctx: *const ZSTD_DCtx) -> size_t {
     if dctx.is_null() {
         return 0;
     }
-    (::core::mem::size_of::<ZSTD_DCtx>())
+    size_of::<ZSTD_DCtx>()
         .wrapping_add(ZSTD_sizeof_DDict((*dctx).ddictLocal))
         .wrapping_add((*dctx).inBuffSize)
         .wrapping_add((*dctx).outBuffSize)
@@ -754,7 +720,7 @@ pub unsafe extern "C" fn ZSTD_initStaticDCtx(
     }
 
     // check minimum workspace size
-    if workspaceSize < ::core::mem::size_of::<ZSTD_DCtx>() {
+    if workspaceSize < size_of::<ZSTD_DCtx>() {
         return core::ptr::null_mut();
     }
 
@@ -767,7 +733,7 @@ pub unsafe extern "C" fn ZSTD_initStaticDCtx(
 }
 
 unsafe fn ZSTD_createDCtx_internal(customMem: ZSTD_customMem) -> *mut ZSTD_DCtx {
-    let alloc = ZSTD_customMalloc(::core::mem::size_of::<ZSTD_DCtx>(), customMem);
+    let alloc = ZSTD_customMalloc(size_of::<ZSTD_DCtx>(), customMem);
     let Some(dctx) = alloc.cast::<MaybeUninit<ZSTD_DCtx>>().as_mut() else {
         return core::ptr::null_mut();
     };
@@ -828,15 +794,14 @@ pub unsafe extern "C" fn ZSTD_freeDCtx(dctx: *mut ZSTD_DCtx) -> size_t {
         ZSTD_freeDDictHashSet((*dctx).ddictSet, cMem);
         (*dctx).ddictSet = core::ptr::null_mut();
     }
-    ZSTD_customFree(
-        dctx as *mut core::ffi::c_void,
-        ::core::mem::size_of::<ZSTD_DCtx>(),
-        cMem,
-    );
+    ZSTD_customFree(dctx as *mut core::ffi::c_void, size_of::<ZSTD_DCtx>(), cMem);
     0
 }
 
 /// No longer useful.
+#[deprecated(
+    note = "This function will likely be removed in the next minor release. It is misleading and has very limited utility."
+)]
 #[cfg_attr(feature = "export-symbols", export_name = crate::prefix!(ZSTD_copyDCtx))]
 pub unsafe extern "C" fn ZSTD_copyDCtx(dstDCtx: *mut ZSTD_DCtx, srcDCtx: *const ZSTD_DCtx) {
     core::ptr::copy_nonoverlapping(
@@ -902,7 +867,7 @@ fn is_frame(src: &[u8]) -> bool {
         return true;
     }
 
-    if magic & ZSTD_MAGIC_SKIPPABLE_MASK == ZSTD_MAGIC_SKIPPABLE_START {
+    if (magic & ZSTD_MAGIC_SKIPPABLE_MASK) == ZSTD_MAGIC_SKIPPABLE_START {
         return true;
     }
 
@@ -936,11 +901,7 @@ fn is_skippable_frame(src: &[u8]) -> bool {
     };
 
     let magic = u32::from_le_bytes([a, b, c, d]);
-    if magic & ZSTD_MAGIC_SKIPPABLE_MASK == ZSTD_MAGIC_SKIPPABLE_START {
-        return true;
-    }
-
-    false
+    (magic & ZSTD_MAGIC_SKIPPABLE_MASK) == ZSTD_MAGIC_SKIPPABLE_START
 }
 
 fn frame_header_size_internal(src: &[u8], format: Format) -> Result<usize, Error> {
@@ -1393,6 +1354,7 @@ fn find_decompressed_size(mut src: &[u8]) -> u64 {
 ///   - the decompressed size field is not present in frame header
 ///   - the frame header is unknown or not supported
 ///   - or the frame header is not complete (`srcSize` is too small)
+#[deprecated(note = "Replaced by [`ZSTD_getFrameContentSize`].")]
 #[cfg_attr(feature = "export-symbols", export_name = crate::prefix!(ZSTD_getDecompressedSize))]
 pub unsafe extern "C" fn ZSTD_getDecompressedSize(
     src: *const core::ffi::c_void,
@@ -1471,13 +1433,13 @@ fn find_frame_size_info(src: &[u8], format: Format) -> Result<ZSTD_frameSizeInfo
         loop {
             let mut blockProperties = blockProperties_t::default();
             let cBlockSize = ZSTD_getcBlockSize(&src[ip..], &mut blockProperties)?;
-            if ZSTD_blockHeaderSize.wrapping_add(cBlockSize) > remainingSize {
+            if ZSTD_BLOCKHEADERSIZE.wrapping_add(cBlockSize) > remainingSize {
                 return Err(Error::srcSize_wrong);
             }
 
-            ip += ZSTD_blockHeaderSize.wrapping_add(cBlockSize) as usize;
+            ip += ZSTD_BLOCKHEADERSIZE.wrapping_add(cBlockSize);
             remainingSize =
-                remainingSize.wrapping_sub(ZSTD_blockHeaderSize.wrapping_add(cBlockSize));
+                remainingSize.wrapping_sub(ZSTD_BLOCKHEADERSIZE.wrapping_add(cBlockSize));
             nbBlocks = nbBlocks.wrapping_add(1);
 
             if blockProperties.lastBlock {
@@ -1644,14 +1606,14 @@ fn decompression_margin(mut src: &[u8]) -> Result<size_t, Error> {
         let frameSizeInfo = frameSizeInfo.map_err(|_| Error::corruption_detected)?;
         let compressedSize = frameSizeInfo.compressedSize;
 
-        if zfh.frameType as core::ffi::c_uint == ZSTD_frame as core::ffi::c_uint {
+        if zfh.frameType == ZSTD_frame as core::ffi::c_uint {
             // add the frame header to our margin
             margin += zfh.headerSize as size_t;
             margin += if zfh.checksumFlag != 0 { 4 } else { 0 };
             margin += 3 * frameSizeInfo.nbBlocks;
             maxBlockSize = Ord::max(maxBlockSize, zfh.blockSizeMax)
         } else {
-            debug_assert!(zfh.frameType == ZSTD_skippableFrame);
+            debug_assert_eq!(zfh.frameType, ZSTD_skippableFrame);
             // add the entire skippable frame size to our margin.
             margin += compressedSize;
         }
@@ -1666,6 +1628,9 @@ fn decompression_margin(mut src: &[u8]) -> Result<size_t, Error> {
 }
 
 /// Insert `src` block into `dctx` history. Useful to track uncompressed blocks.
+#[deprecated(
+    note = "The block API is deprecated in favor of the normal compression API. See docs."
+)]
 #[cfg_attr(feature = "export-symbols", export_name = crate::prefix!(ZSTD_insertBlock))]
 pub unsafe extern "C" fn ZSTD_insertBlock(
     dctx: *mut ZSTD_DCtx,
@@ -1755,7 +1720,7 @@ fn ZSTD_DCtx_trace_end(
 /// Decompress a frame.
 /// - `dctx` must be properly initialized
 /// - will update `*srcPtr` and `*srcSizePtr` to make `*srcPtr` progress by one frame
-unsafe fn ZSTD_decompressFrame(
+fn ZSTD_decompressFrame(
     dctx: &mut ZSTD_DCtx,
     dst: Writer<'_>,
     srcPtr: &mut Reader<'_>,
@@ -1765,16 +1730,15 @@ unsafe fn ZSTD_decompressFrame(
 
     let start_capacity = dst.capacity();
     let mut op = dst;
-    let oend = op.as_mut_ptr_range().end;
 
     // check
-    if ip.len() < dctx.format.frame_header_size_min() + ZSTD_blockHeaderSize {
+    if ip.len() < dctx.format.frame_header_size_min() + ZSTD_BLOCKHEADERSIZE {
         return Err(Error::srcSize_wrong);
     }
 
     // Frame Header
     let frameHeaderSize = frame_header_size_internal(ip.as_slice(), dctx.format)?;
-    if ip.len() < frameHeaderSize.wrapping_add(ZSTD_blockHeaderSize) {
+    if ip.len() < frameHeaderSize.wrapping_add(ZSTD_BLOCKHEADERSIZE) {
         return Err(Error::srcSize_wrong);
     }
     ZSTD_decodeFrameHeader(dctx, &ip.as_slice()[..frameHeaderSize])?;
@@ -1790,11 +1754,11 @@ unsafe fn ZSTD_decompressFrame(
 
     // loop on each block
     loop {
-        let mut oBlockEnd = oend;
+        let mut blockCapacity = op.capacity();
 
         let (blockProperties, cBlockSize) = getc_block_size(ip.as_slice())?;
 
-        *ip = ip.subslice(ZSTD_blockHeaderSize..);
+        *ip = ip.subslice(ZSTD_BLOCKHEADERSIZE..);
         if cBlockSize > ip.len() {
             return Err(Error::srcSize_wrong);
         }
@@ -1812,30 +1776,24 @@ unsafe fn ZSTD_decompressFrame(
             // ZSTD_decompressBlock_internal to never write past ip.
             //
             // See ZSTD_allocateLiteralsBuffer() for reference.
-            oBlockEnd = op
-                .as_mut_ptr()
-                .add(ip.as_ptr().offset_from_unsigned(op.as_mut_ptr()));
+            blockCapacity = ip.as_ptr().addr() - op.as_mut_ptr().addr();
         }
 
         let decodedSize = match blockProperties.blockType {
             BlockType::Raw => {
-                // Use oend instead of oBlockEnd because this function is safe to overlap. It uses memmove.
+                // Use the full capacity instead of blockCapacity because this function is safe to overlap. It uses memmove.
                 copy_raw_block_reader(op.subslice(..), ip.subslice(..cBlockSize))?
             }
-            BlockType::Rle => {
-                let capacity = oBlockEnd.offset_from(op.as_mut_ptr()) as size_t;
-                ZSTD_setRleBlock(
-                    op.subslice(..capacity),
-                    ip.as_slice()[0],
-                    blockProperties.origSize as size_t,
-                )?
-            }
+            BlockType::Rle => ZSTD_setRleBlock(
+                op.subslice(..blockCapacity),
+                ip.as_slice()[0],
+                blockProperties.origSize as size_t,
+            )?,
             BlockType::Compressed => {
                 debug_assert!(dctx.isFrameDecompression);
-                let capacity = oBlockEnd.offset_from(op.as_mut_ptr()) as size_t;
                 ZSTD_decompressBlock_internal_help(
                     dctx,
-                    op.subslice(..capacity),
+                    op.subslice(..blockCapacity),
                     ip.subslice(..cBlockSize).as_slice(),
                     StreamingOperation::NotStreaming,
                 )?
@@ -2042,12 +2000,11 @@ pub unsafe extern "C" fn ZSTD_decompress(
     src: *const core::ffi::c_void,
     srcSize: size_t,
 ) -> size_t {
-    let mut regenSize: size_t = 0;
     let dctx = ZSTD_createDCtx_internal(ZSTD_customMem::default());
     if dctx.is_null() {
         return Error::memory_allocation.to_error_code();
     }
-    regenSize = ZSTD_decompressDCtx(dctx, dst, dstCapacity, src, srcSize);
+    let regenSize = ZSTD_decompressDCtx(dctx, dst, dstCapacity, src, srcSize);
     ZSTD_freeDCtx(dctx);
     regenSize
 }
@@ -2156,7 +2113,7 @@ fn decompress_continue(
             dctx.headerBuffer[(dctx.headerSize) - src.len()..][..src.len()].copy_from_slice(src);
             let header_buffer = dctx.headerBuffer;
             ZSTD_decodeFrameHeader(dctx, &header_buffer[..dctx.headerSize])?;
-            dctx.expected = ZSTD_blockHeaderSize;
+            dctx.expected = ZSTD_BLOCKHEADERSIZE;
             dctx.stage = DecompressStage::DecodeBlockHeader;
             Ok(0)
         }
@@ -2188,39 +2145,39 @@ fn decompress_continue(
                     dctx.stage = DecompressStage::GetFrameHeaderSize;
                 }
             } else {
-                dctx.expected = ZSTD_blockHeaderSize; // jump to next header
+                dctx.expected = ZSTD_BLOCKHEADERSIZE; // jump to next header
                 dctx.stage = DecompressStage::DecodeBlockHeader;
             }
             Ok(0)
         }
 
         DecompressStage::DecompressBlock | DecompressStage::DecompressLastBlock => {
-            let mut rSize: size_t = 0;
-            match dctx.bType {
+            let rSize = match dctx.bType {
                 BlockType::Compressed => {
                     debug_assert!(dctx.isFrameDecompression);
                     dctx.expected = 0; // streaming not supported
-                    rSize = ZSTD_decompressBlock_internal_help(
+                    ZSTD_decompressBlock_internal_help(
                         dctx,
                         dst.subslice(..),
                         src,
                         StreamingOperation::IsStreaming,
-                    )?;
+                    )?
                 }
                 BlockType::Raw => {
                     debug_assert!(src.len() <= dctx.expected);
-                    rSize = copy_raw_block_slice(dst.subslice(..), src)?;
+                    let rSize = copy_raw_block_slice(dst.subslice(..), src)?;
                     debug_assert_eq!(rSize, src.len());
                     dctx.expected = (dctx.expected).wrapping_sub(rSize);
+                    rSize
                 }
                 BlockType::Rle => {
                     dctx.expected = 0; // streaming not supported
-                    rSize = ZSTD_setRleBlock(dst.subslice(..), src[0], dctx.rleSize)?;
+                    ZSTD_setRleBlock(dst.subslice(..), src[0], dctx.rleSize)?
                 }
                 BlockType::Reserved => {
                     return Err(Error::corruption_detected);
                 }
-            }
+            };
             if rSize > dctx.fParams.blockSizeMax as size_t {
                 return Err(Error::corruption_detected);
             }
@@ -2256,7 +2213,7 @@ fn decompress_continue(
                 }
             } else {
                 dctx.stage = DecompressStage::DecodeBlockHeader;
-                dctx.expected = ZSTD_blockHeaderSize;
+                dctx.expected = ZSTD_BLOCKHEADERSIZE;
             }
             Ok(rSize)
         }
@@ -2300,11 +2257,14 @@ fn decompress_continue(
 /// # Returns
 ///
 /// - size of entropy tables read
-/// - an error code, which can be tested with [`ZSTD_isError`]
-pub fn ZSTD_loadDEntropy(entropy: &mut ZSTD_entropyDTables_t, dict: &[u8]) -> size_t {
+/// - [`Error::dictionary_corrupted`] if the dictionary entropy is invalid
+pub fn ZSTD_loadDEntropy(
+    entropy: &mut ZSTD_entropyDTables_t,
+    dict: &[u8],
+) -> Result<size_t, Error> {
     // skip header = magic + dictID
     let Some((_, mut dictPtr)) = dict.split_at_checked(8) else {
-        return Error::dictionary_corrupted.to_error_code();
+        return Err(Error::dictionary_corrupted);
     };
 
     const _: () = assert!(
@@ -2320,30 +2280,25 @@ pub fn ZSTD_loadDEntropy(entropy: &mut ZSTD_entropyDTables_t, dict: &[u8]) -> si
     let workspace = &mut entropy.LLTable;
     let wksp: &mut HUF_ReadDTableX2_Workspace = unsafe { core::mem::transmute(workspace) };
 
-    let hSize = HUF_readDTableX2_wksp(&mut entropy.hufTable, dictPtr, wksp, 0);
-    if ERR_isError(hSize) {
-        return Error::dictionary_corrupted.to_error_code();
-    }
+    let hSize = HUF_readDTableX2_wksp(&mut entropy.hufTable, dictPtr, wksp, 0)
+        .map_err(|_| Error::dictionary_corrupted)?;
 
     dictPtr = &dictPtr[hSize..];
     let mut offcodeNCount: [core::ffi::c_short; 32] = [0; 32];
     let mut offcodeMaxValue = MaxOff;
     let mut offcodeLog: core::ffi::c_uint = 0;
-    let offcodeHeaderSize = FSE_readNCount_slice(
+    let offcodeHeaderSize = FSE_readNCount(
         &mut offcodeNCount,
         &mut offcodeMaxValue,
         &mut offcodeLog,
         dictPtr,
-    );
-
-    let Ok(offcodeHeaderSize) = offcodeHeaderSize else {
-        return Error::dictionary_corrupted.to_error_code();
-    };
+    )
+    .map_err(|_| Error::dictionary_corrupted)?;
     if offcodeMaxValue > 31 {
-        return Error::dictionary_corrupted.to_error_code();
+        return Err(Error::dictionary_corrupted);
     }
     if offcodeLog > 8 {
-        return Error::dictionary_corrupted.to_error_code();
+        return Err(Error::dictionary_corrupted);
     }
     ZSTD_buildFSETable(
         &mut entropy.OFTable,
@@ -2358,20 +2313,18 @@ pub fn ZSTD_loadDEntropy(entropy: &mut ZSTD_entropyDTables_t, dict: &[u8]) -> si
     let mut matchlengthNCount: [core::ffi::c_short; 53] = [0; 53];
     let mut matchlengthMaxValue = MaxML;
     let mut matchlengthLog: core::ffi::c_uint = 0;
-    let matchlengthHeaderSize = FSE_readNCount_slice(
+    let matchlengthHeaderSize = FSE_readNCount(
         &mut matchlengthNCount,
         &mut matchlengthMaxValue,
         &mut matchlengthLog,
         dictPtr,
-    );
-    let Ok(matchlengthHeaderSize) = matchlengthHeaderSize else {
-        return Error::dictionary_corrupted.to_error_code();
-    };
+    )
+    .map_err(|_| Error::dictionary_corrupted)?;
     if matchlengthMaxValue > 52 {
-        return Error::dictionary_corrupted.to_error_code();
+        return Err(Error::dictionary_corrupted);
     }
     if matchlengthLog > 9 {
-        return Error::dictionary_corrupted.to_error_code();
+        return Err(Error::dictionary_corrupted);
     }
     ZSTD_buildFSETable(
         &mut entropy.MLTable,
@@ -2386,20 +2339,18 @@ pub fn ZSTD_loadDEntropy(entropy: &mut ZSTD_entropyDTables_t, dict: &[u8]) -> si
     let mut litlengthNCount: [core::ffi::c_short; 36] = [0; 36];
     let mut litlengthMaxValue = MaxLL;
     let mut litlengthLog: core::ffi::c_uint = 0;
-    let litlengthHeaderSize = FSE_readNCount_slice(
+    let litlengthHeaderSize = FSE_readNCount(
         &mut litlengthNCount,
         &mut litlengthMaxValue,
         &mut litlengthLog,
         dictPtr,
-    );
-    let Ok(litlengthHeaderSize) = litlengthHeaderSize else {
-        return Error::dictionary_corrupted.to_error_code();
-    };
+    )
+    .map_err(|_| Error::dictionary_corrupted)?;
     if litlengthMaxValue > 35 {
-        return Error::dictionary_corrupted.to_error_code();
+        return Err(Error::dictionary_corrupted);
     }
     if litlengthLog > 9 {
-        return Error::dictionary_corrupted.to_error_code();
+        return Err(Error::dictionary_corrupted);
     }
     ZSTD_buildFSETable(
         &mut entropy.LLTable,
@@ -2412,19 +2363,19 @@ pub fn ZSTD_loadDEntropy(entropy: &mut ZSTD_entropyDTables_t, dict: &[u8]) -> si
     );
     dictPtr = &dictPtr[litlengthHeaderSize..];
     let Some((chunk, dict_content)) = dictPtr.split_first_chunk::<12>() else {
-        return Error::dictionary_corrupted.to_error_code();
+        return Err(Error::dictionary_corrupted);
     };
 
     let dict_content_size = dict_content.len();
     for (i, rep) in chunk.as_chunks::<4>().0.iter().enumerate() {
         let rep = u32::from_le_bytes(*rep);
         if rep == 0 || rep as size_t > dict_content_size {
-            return Error::dictionary_corrupted.to_error_code();
+            return Err(Error::dictionary_corrupted);
         }
         entropy.rep[i] = rep;
     }
 
-    dict.len() - dict_content_size
+    Ok(dict.len() - dict_content_size)
 }
 
 fn ZSTD_refDictContent(dctx: &mut ZSTD_DCtx, dict: &[u8]) {
@@ -2448,10 +2399,7 @@ fn ZSTD_decompress_insertDictionary(dctx: &mut ZSTD_DCtx, dict: &[u8]) -> Result
     }
     dctx.dictID = u32::from_le_bytes(*dict_id);
 
-    let eSize = ZSTD_loadDEntropy(&mut dctx.entropy, dict);
-    if ERR_isError(eSize) {
-        return Err(Error::dictionary_corrupted);
-    }
+    let eSize = ZSTD_loadDEntropy(&mut dctx.entropy, dict)?;
 
     dctx.fseEntropy = true;
     dctx.litEntropy = dctx.fseEntropy;
@@ -2669,7 +2617,7 @@ pub unsafe extern "C" fn ZSTD_freeDStream(zds: *mut ZSTD_DStream) -> size_t {
 /// Recommended size for input buffer
 #[cfg_attr(feature = "export-symbols", export_name = crate::prefix!(ZSTD_DStreamInSize))]
 pub const extern "C" fn ZSTD_DStreamInSize() -> size_t {
-    (ZSTD_BLOCKSIZE_MAX as size_t).wrapping_add(ZSTD_blockHeaderSize)
+    (ZSTD_BLOCKSIZE_MAX as size_t).wrapping_add(ZSTD_BLOCKHEADERSIZE)
 }
 
 /// Recommended size for output buffer. Guarantees to successfully flush at least one complete
@@ -2816,6 +2764,9 @@ pub unsafe extern "C" fn ZSTD_DCtx_refPrefix(
 ///
 /// - the expected size, aka [`Format::starting_input_length`]
 /// - an error code, which can be tested with [`ZSTD_isError`]
+#[deprecated(
+    note = "Use [`ZSTD_DCtx_reset`] and [`ZSTD_DCtx_loadDictionary`], see zstd.h for detailed instructions"
+)]
 #[cfg_attr(feature = "export-symbols", export_name = crate::prefix!(ZSTD_initDStream_usingDict))]
 pub unsafe extern "C" fn ZSTD_initDStream_usingDict(
     zds: *mut ZSTD_DStream,
@@ -2857,6 +2808,9 @@ pub unsafe extern "C" fn ZSTD_initDStream(zds: *mut ZSTD_DStream) -> size_t {
 /// decompression context and then using [`ZSTD_DCtx_refDDict`] to reference the dictionary.
 ///
 /// Note: `DDict` will just be referenced, and must outlive decompression session
+#[deprecated(
+    note = "Use [`ZSTD_DCtx_reset`] and [`ZSTD_DCtx_refDDict`], see zstd.h for detailed instructions"
+)]
 #[cfg_attr(feature = "export-symbols", export_name = crate::prefix!(ZSTD_initDStream_usingDDict))]
 pub unsafe extern "C" fn ZSTD_initDStream_usingDDict(
     dctx: *mut ZSTD_DStream,
@@ -2880,6 +2834,7 @@ pub unsafe extern "C" fn ZSTD_initDStream_usingDDict(
 ///
 /// - the expected size, aka [`Format::starting_input_length`]
 /// - an error code, which can be tested with [`ZSTD_isError`]
+#[deprecated(note = "Use [`ZSTD_DCtx_reset`], see zstd.h for detailed instructions")]
 #[cfg_attr(feature = "export-symbols", export_name = crate::prefix!(ZSTD_resetDStream))]
 pub unsafe extern "C" fn ZSTD_resetDStream(dctx: *mut ZSTD_DStream) -> size_t {
     let err_code = ZSTD_DCtx_reset(dctx, ZSTD_ResetDirective::ZSTD_reset_session_only);
@@ -2935,9 +2890,8 @@ pub unsafe extern "C" fn ZSTD_DCtx_refDDict(
             };
 
             debug_assert_eq!((*dctx).staticSize, 0); // ddictSet cannot have been allocated if static dctx
-            let err_code = ZSTD_DDictHashSet_addDDict(ddictSet, ddict, (*dctx).customMem);
-            if ERR_isError(err_code) {
-                return err_code;
+            if let Err(err) = ZSTD_DDictHashSet_addDDict(ddictSet, ddict, (*dctx).customMem) {
+                return err.to_error_code();
             }
         }
     }
@@ -2968,8 +2922,8 @@ pub unsafe extern "C" fn ZSTD_DCtx_setMaxWindowSize(
     maxWindowSize: size_t,
 ) -> size_t {
     let bounds = ZSTD_dParam_getBounds(ZSTD_dParameter::ZSTD_d_windowLogMax);
-    let min = (1) << bounds.lowerBound;
-    let max = (1) << bounds.upperBound;
+    let min = 1 << bounds.lowerBound;
+    let max = 1 << bounds.upperBound;
     if (*dctx).streamStage != StreamStage::Init {
         return Error::stage_wrong.to_error_code();
     }
@@ -2993,6 +2947,7 @@ pub unsafe extern "C" fn ZSTD_DCtx_setMaxWindowSize(
 ///
 /// - 0 if format was set successfully
 /// - an error code, which can be tested with [`ZSTD_isError`]
+#[deprecated(note = "Use [`ZSTD_DCtx_setParameter`] instead.")]
 #[cfg_attr(feature = "export-symbols", export_name = crate::prefix!(ZSTD_DCtx_setFormat))]
 pub unsafe extern "C" fn ZSTD_DCtx_setFormat(
     dctx: *mut ZSTD_DCtx,
@@ -3137,7 +3092,7 @@ pub unsafe extern "C" fn ZSTD_DCtx_setParameter(
             if !ZSTD_dParam_withinBounds(ZSTD_dParameter::ZSTD_d_windowLogMax, value) {
                 return Error::parameter_outOfBound.to_error_code();
             }
-            (*dctx).maxWindowSize = (1) << value;
+            (*dctx).maxWindowSize = 1 << value;
             return 0;
         }
         ZSTD_dParameter::ZSTD_d_experimentalParam1 => {
@@ -3610,15 +3565,14 @@ pub unsafe extern "C" fn ZSTD_decompressStream(
                         if zds.staticSize != 0 {
                             return Error::memory_allocation.to_error_code();
                         }
-                        let err_code = ZSTD_initLegacyStream(
+                        if let Err(err) = ZSTD_initLegacyStream(
                             &mut zds.legacyContext,
                             zds.previousLegacyVersion,
                             legacyVersion,
                             dict,
                             dictSize,
-                        );
-                        if ERR_isError(err_code) {
-                            return err_code;
+                        ) {
+                            return err.to_error_code();
                         }
                         zds.previousLegacyVersion = legacyVersion;
                         zds.legacyVersion = zds.previousLegacyVersion;
@@ -3663,9 +3617,9 @@ pub unsafe extern "C" fn ZSTD_decompressStream(
                         return err.to_error_code();
                     }
                     // remaining header bytes + next block header
-                    return Ord::max(ZSTD_FRAMEHEADERSIZE_MIN(zds.format), hSize)
+                    return Ord::max(zds.format.frame_header_size_min(), hSize)
                         .wrapping_sub(zds.lhSize)
-                        .wrapping_add(ZSTD_blockHeaderSize);
+                        .wrapping_add(ZSTD_BLOCKHEADERSIZE);
                 }
                 debug_assert!(!ip.is_null());
                 core::ptr::copy_nonoverlapping(
@@ -3744,7 +3698,7 @@ pub unsafe extern "C" fn ZSTD_decompressStream(
                     if let Err(err) = ZSTD_decodeFrameHeader(zds, &header_buffer[..zds.lhSize]) {
                         return err.to_error_code();
                     }
-                    zds.expected = ZSTD_blockHeaderSize;
+                    zds.expected = ZSTD_BLOCKHEADERSIZE;
                     zds.stage = DecompressStage::DecodeBlockHeader;
                 }
 
@@ -3898,8 +3852,8 @@ pub unsafe extern "C" fn ZSTD_decompressStream(
     }
 
     // result
-    input.pos = ip.byte_offset_from(input.src) as size_t;
-    output.pos = op.byte_offset_from(output.dst) as size_t;
+    input.pos = ip.byte_offset_from_unsigned(input.src);
+    output.pos = op.byte_offset_from_unsigned(output.dst);
 
     // Update the expected output buffer for ZSTD_obm_stable.
     zds.expectedOutBuffer = *output;
@@ -3947,7 +3901,7 @@ pub unsafe extern "C" fn ZSTD_decompressStream(
     }
     // preload header of next block
     nextSrcSizeHint = nextSrcSizeHint.wrapping_add(
-        ZSTD_blockHeaderSize * (zds.stage.to_next_input_type() == NextInputType::Block) as size_t,
+        ZSTD_BLOCKHEADERSIZE * (zds.stage.to_next_input_type() == NextInputType::Block) as size_t,
     );
     debug_assert!(zds.inPos <= nextSrcSizeHint);
     // part already loaded

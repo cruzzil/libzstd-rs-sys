@@ -3,9 +3,8 @@ use std::time::{Duration, Instant};
 
 use libc::size_t;
 
-use crate::lib::common::bits::ZSTD_highbit32;
 use crate::lib::common::error_private::{ERR_getErrorName, ERR_isError, Error};
-use crate::lib::common::huf::{HUF_CElt, HUF_CTABLE_WORKSPACE_SIZE_U32, HUF_WORKSPACE_SIZE};
+use crate::lib::common::huf::{CTable, HUF_CTABLE_WORKSPACE_SIZE_U32, HUF_WORKSPACE_SIZE};
 use crate::lib::common::mem::{MEM_readLE32, MEM_writeLE32};
 use crate::lib::common::xxhash::ZSTD_XXH64;
 use crate::lib::common::zstd_internal::{
@@ -13,11 +12,12 @@ use crate::lib::common::zstd_internal::{
 };
 use crate::lib::compress::fse_compress::{FSE_normalizeCount, FSE_writeNCount};
 use crate::lib::compress::huf_compress::{HUF_buildCTable_wksp, HUF_writeCTable_wksp};
+#[expect(deprecated)] // We still use deprecated functions internally
 use crate::lib::compress::zstd_compress::{
     SeqDef, ZSTD_CCtx, ZSTD_CDict, ZSTD_compressBegin_usingCDict_deprecated,
-    ZSTD_compressBlock_deprecated, ZSTD_compressedBlockState_t, ZSTD_createCCtx,
-    ZSTD_createCDict_advanced, ZSTD_freeCCtx, ZSTD_freeCDict, ZSTD_getParams, ZSTD_getSeqStore,
-    ZSTD_loadCEntropy, ZSTD_reset_compressedBlockState, ZSTD_seqToCodes,
+    ZSTD_compressBlock_deprecated, ZSTD_compressedBlockState_t, ZSTD_createCDict_advanced,
+    ZSTD_freeCCtxContent, ZSTD_freeCDict, ZSTD_getParams, ZSTD_initCCtx, ZSTD_loadCEntropy,
+    ZSTD_reset_compressedBlockState, ZSTD_seqToCodes,
 };
 use crate::lib::dictBuilder::divsufsort::divsufsort;
 use crate::lib::dictBuilder::fastcover::ZDICT_optimizeTrainFromBuffer_fastCover;
@@ -31,13 +31,12 @@ use crate::lib::zstd::{
     ZSTD_CLEVEL_DEFAULT, ZSTD_MAGIC_DICTIONARY,
 };
 
-#[derive(Clone)]
 #[repr(C)]
 struct EStats_ress_t {
     /// dictionary
     dict: *mut ZSTD_CDict,
     /// working context
-    zc: *mut ZSTD_CCtx,
+    zc: Box<ZSTD_CCtx>,
     /// must be [`ZSTD_BLOCKSIZE_MAX`] allocated
     workPlace: Box<[MaybeUninit<u8>]>,
 }
@@ -124,12 +123,15 @@ pub unsafe extern "C" fn ZDICT_getDictHeaderSize(
 
     let mut wksp = Box::<[u32]>::new_uninit_slice(HUF_WORKSPACE_SIZE / 4);
 
-    ZSTD_loadCEntropy(
+    let dict = core::slice::from_raw_parts(dictBuffer as *const u8, dictSize);
+    match ZSTD_loadCEntropy(
         bs.as_mut_ptr(),
         wksp.as_mut_ptr() as *mut core::ffi::c_void,
-        dictBuffer,
-        dictSize,
-    )
+        dict,
+    ) {
+        Ok(size) => size,
+        Err(err) => err.to_error_code(),
+    }
 }
 
 fn ZDICT_count(pIn: &[u8], pMatch: &[u8]) -> size_t {
@@ -149,9 +151,6 @@ fn ZDICT_analyzePos(
     minRatio: usize,
     notificationLevel: u32,
 ) -> DictItem {
-    let mut lengthList = [0u32; LLIMIT];
-    let mut maxLength = LLIMIT;
-
     // The C implementation maps index `len` and `-1` to the length of the suffix array.
     let suffix = |index| {
         if index == usize::MAX || index == suffix_slice.len() {
@@ -186,26 +185,24 @@ fn ZDICT_analyzePos(
     }
 
     // look forward
-    let mut length: size_t = 0;
     loop {
         end = end.wrapping_add(1);
-        length = ZDICT_count(&buffer[pos..], &buffer[suffix(end as usize) as usize..]);
+        let length = ZDICT_count(&buffer[pos..], &buffer[suffix(end as usize) as usize..]);
         if length < MINMATCHLENGTH {
             break;
         }
     }
 
     // look backward
-    let mut length_0: size_t = 0;
     loop {
-        length_0 = ZDICT_count(
+        let length = ZDICT_count(
             &buffer[pos..],
             &buffer[suffix((start as usize).wrapping_sub(1)) as usize..],
         );
-        if length_0 >= MINMATCHLENGTH {
+        if length >= MINMATCHLENGTH {
             start = start.wrapping_sub(1);
         }
-        if length_0 < MINMATCHLENGTH {
+        if length < MINMATCHLENGTH {
             break;
         }
     }
@@ -218,8 +215,6 @@ fn ZDICT_analyzePos(
         return solution;
     }
 
-    let mut i: core::ffi::c_int = 0;
-    let mut mml: u32 = 0;
     let mut refinedStart = start;
     let mut refinedEnd = end;
 
@@ -234,7 +229,7 @@ fn ZDICT_analyzePos(
         eprintln!();
     }
 
-    mml = MINMATCHLENGTH as u32;
+    let mut mml = MINMATCHLENGTH as u32;
     loop {
         let mut currentChar = 0;
         let mut currentCount = 0u32;
@@ -273,6 +268,7 @@ fn ZDICT_analyzePos(
     end = start;
 
     // look forward
+    let mut lengthList = [0u32; LLIMIT];
     loop {
         end = end.wrapping_add(1);
         let mut length = ZDICT_count(&buffer[pos..], &buffer[suffix(end as usize) as usize..]);
@@ -286,39 +282,31 @@ fn ZDICT_analyzePos(
     }
 
     // look backward
-    let mut length_2 = MINMATCHLENGTH;
-    while (length_2 >= MINMATCHLENGTH) as core::ffi::c_int & (start > 0) as core::ffi::c_int != 0 {
-        length_2 = ZDICT_count(
+    let mut length = MINMATCHLENGTH;
+    while (length >= MINMATCHLENGTH) as core::ffi::c_int & (start > 0) as core::ffi::c_int != 0 {
+        length = ZDICT_count(
             &buffer[pos..],
             &buffer[suffix(start.wrapping_sub(1) as usize) as usize..],
         );
-        if length_2 >= LLIMIT {
-            length_2 = LLIMIT - 1;
+        if length >= LLIMIT {
+            length = LLIMIT - 1;
         }
-        lengthList[length_2] += 1;
-        if length_2 >= MINMATCHLENGTH {
+        lengthList[length] += 1;
+        if length >= MINMATCHLENGTH {
             start = start.wrapping_sub(1);
         }
     }
 
     // largest useful length
     let mut cumulLength = [0u32; LLIMIT];
-    cumulLength[maxLength.wrapping_sub(1)] = lengthList[maxLength - 1];
-    i = maxLength.wrapping_sub(2) as core::ffi::c_int;
-    while i >= 0 {
-        cumulLength[i as usize] =
-            (cumulLength[(i + 1) as usize]).wrapping_add(lengthList[i as usize]);
-        i -= 1;
+    cumulLength[LLIMIT - 1] = lengthList[LLIMIT - 1];
+    for i in (0..LLIMIT - 1).rev() {
+        cumulLength[i] = (cumulLength[i + 1]).wrapping_add(lengthList[i]);
     }
-    let mut u_0: core::ffi::c_uint = 0;
-    u_0 = (LLIMIT - 1) as core::ffi::c_uint;
-    while u_0 >= MINMATCHLENGTH as core::ffi::c_uint {
-        if cumulLength[u_0 as usize] >= minRatio as u32 {
-            break;
-        }
-        u_0 = u_0.wrapping_sub(1);
-    }
-    maxLength = u_0 as size_t;
+    let mut maxLength = (MINMATCHLENGTH..LLIMIT)
+        .rev()
+        .find(|&i| cumulLength[i] >= minRatio as u32)
+        .unwrap_or(MINMATCHLENGTH - 1);
 
     // reduce maxLength in case of final into repetitive data
     let mut l = maxLength as u32;
@@ -356,19 +344,14 @@ fn ZDICT_analyzePos(
 
     // mark positions done
     for id_0 in start..end {
-        let mut pEnd: u32 = 0;
-        let mut length_3: u32 = 0;
-        let testedPos = suffix(id_0 as usize);
-        if testedPos as size_t == pos {
-            length_3 = solution.length;
+        let testedPos = suffix(id_0 as usize) as usize;
+        let length = if testedPos == pos {
+            solution.length as usize
         } else {
-            length_3 = ZDICT_count(&buffer[pos..], &buffer[testedPos as usize..]) as u32;
-            if length_3 > solution.length {
-                length_3 = solution.length;
-            }
-        }
-        pEnd = testedPos.wrapping_add(length_3);
-        doneMarks[testedPos as usize..pEnd as usize].fill(true);
+            ZDICT_count(&buffer[pos..], &buffer[testedPos..]).min(solution.length as usize)
+        };
+        let pEnd = testedPos.wrapping_add(length);
+        doneMarks[testedPos..pEnd].fill(true);
     }
 
     solution
@@ -394,8 +377,7 @@ fn ZDICT_tryMerge(
     let buf = buffer;
 
     /* tail overlap */
-    let mut u = 1usize;
-    while u < tableSize as usize {
+    for mut u in 1..tableSize as usize {
         if (u as u32 != eltNbToSkip) && table[u].pos > elt.pos && table[u].pos <= eltEnd {
             /* append */
             let addedLength = table[u].pos - elt.pos;
@@ -412,14 +394,11 @@ fn ZDICT_tryMerge(
             table[u] = elt;
             return u as u32;
         }
-        u = u.wrapping_add(1);
     }
 
     /* front overlap */
-    let mut u = 1usize;
-    while u < tableSize as usize {
+    for mut u in 1..tableSize as usize {
         if u == eltNbToSkip as usize {
-            u = u.wrapping_add(1);
             continue;
         }
 
@@ -444,21 +423,19 @@ fn ZDICT_tryMerge(
             return u as u32;
         }
 
-        if buf[table[u].pos as usize..][..8] == buf[elt.pos as usize + 1..][..8] {
-            if isIncluded(
+        if buf[table[u].pos as usize..][..8] == buf[elt.pos as usize + 1..][..8]
+            && isIncluded(
                 &buf[table[u].pos as usize..],
                 &buf[elt.pos as usize + 1..],
                 table[u].length as usize,
-            ) {
-                let addedLength = Ord::max(1, elt.length.checked_sub(table[u].length).unwrap_or(1));
-                table[u].pos = elt.pos;
-                table[u].savings += elt.savings * addedLength / elt.length;
-                table[u].length = Ord::min(elt.length, table[u].length + 1);
-                return u as u32;
-            }
+            )
+        {
+            let addedLength = Ord::max(1, elt.length.checked_sub(table[u].length).unwrap_or(1));
+            table[u].pos = elt.pos;
+            table[u].savings += elt.savings * addedLength / elt.length;
+            table[u].length = Ord::min(elt.length, table[u].length + 1);
+            return u as u32;
         }
-
-        u = u.wrapping_add(1);
     }
 
     0
@@ -494,12 +471,11 @@ fn ZDICT_insertDictItem(table: &mut [DictItem], elt: DictItem, buffer: &[u8]) {
     }
 
     // insert
-    let mut current: u32 = 0;
     let mut nextElt = table[0].pos;
     if nextElt >= maxSize {
         nextElt = maxSize.wrapping_sub(1);
     }
-    current = nextElt.wrapping_sub(1);
+    let mut current = nextElt.wrapping_sub(1);
     while (table[current as usize]).savings < elt.savings {
         table[current.wrapping_add(1) as usize] = table[current as usize];
         current = current.wrapping_sub(1);
@@ -532,9 +508,7 @@ fn ZDICT_trainBuffer_legacy(
         eprintln!("\r{:70 }\r", ""); // clean display line
     }
 
-    if minRatio < MINRATIO {
-        minRatio = MINRATIO;
-    }
+    minRatio = Ord::max(minRatio, MINRATIO);
 
     // limit sample set size (divsufsort limitation)
     if bufferSize > ZDICT_MAX_SAMPLES_SIZE && notificationLevel >= 3 {
@@ -650,15 +624,19 @@ unsafe fn ZDICT_countEStats(
 ) {
     let blockSizeMax = Ord::min(1 << 17, 1 << params.cParams.windowLog);
     let srcSize = Ord::min(src.len(), blockSizeMax);
-    let errorCode = ZSTD_compressBegin_usingCDict_deprecated(esr.zc, esr.dict);
+
+    #[allow(deprecated)] // Still used internally
+    let errorCode = ZSTD_compressBegin_usingCDict_deprecated(esr.zc.as_mut(), esr.dict);
     if ERR_isError(errorCode) {
         if notificationLevel >= 1 {
             eprintln!("warning : ZSTD_compressBegin_usingCDict failed");
         }
         return;
     }
+
+    #[allow(deprecated)] // Still used internally
     let cSize = ZSTD_compressBlock_deprecated(
-        esr.zc,
+        esr.zc.as_mut(),
         esr.workPlace.as_mut_ptr().cast(),
         ZSTD_BLOCKSIZE_MAX as size_t,
         src.as_ptr().cast::<core::ffi::c_void>(),
@@ -676,37 +654,39 @@ unsafe fn ZDICT_countEStats(
         return;
     }
 
-    let seqStorePtr = ZSTD_getSeqStore(esr.zc);
+    let seqStore = &esr.zc.seqStore;
 
     // literals stats
-    let mut bytePtr = (*seqStorePtr).litStart as *const u8;
-    while bytePtr < (*seqStorePtr).lit as *const u8 {
+    let mut bytePtr = seqStore.litStart as *const u8;
+    while bytePtr < seqStore.lit as *const u8 {
         countLit[usize::from(*bytePtr)] += 1;
         bytePtr = bytePtr.add(1);
     }
 
     // seqStats
-    let nbSeq = ((*seqStorePtr).sequences).offset_from((*seqStorePtr).sequencesStart) as usize;
-    ZSTD_seqToCodes(seqStorePtr);
+    let nbSeq = seqStore
+        .sequences
+        .offset_from_unsigned(seqStore.sequencesStart);
+    ZSTD_seqToCodes(seqStore);
 
-    let codePtr: *const u8 = (*seqStorePtr).ofCode;
+    let codePtr: *const u8 = seqStore.ofCode;
     for u in 0..nbSeq {
         offsetcodeCount[*codePtr.add(u) as usize] += 1;
     }
-    let codePtr: *const u8 = (*seqStorePtr).mlCode;
+    let codePtr: *const u8 = seqStore.mlCode;
     for u in 0..nbSeq {
         matchlengthCount[*codePtr.add(u) as usize] += 1;
     }
-    let codePtr: *const u8 = (*seqStorePtr).llCode;
+    let codePtr: *const u8 = seqStore.llCode;
     for u in 0..nbSeq {
         litlengthCount[*codePtr.add(u) as usize] += 1;
     }
 
     if nbSeq >= 2 {
         // rep offsets
-        let seq: *const SeqDef = (*seqStorePtr).sequencesStart;
-        let mut offset1 = (*seq).offBase.wrapping_sub(ZSTD_REP_NUM as u32) as usize;
-        let mut offset2 = (*seq.add(1)).offBase.wrapping_sub(ZSTD_REP_NUM as u32) as usize;
+        let seq: *const SeqDef = seqStore.sequencesStart;
+        let mut offset1 = (*seq).offBase.wrapping_sub(ZSTD_REP_NUM) as usize;
+        let mut offset2 = (*seq.add(1)).offBase.wrapping_sub(ZSTD_REP_NUM) as usize;
         if offset1 >= MAXREPOFFSET {
             offset1 = 0;
         }
@@ -742,7 +722,7 @@ fn ZDICT_flatLit(countLit: &mut [core::ffi::c_uint; 256]) {
     countLit[254] = 1;
 }
 
-const OFFCODE_MAX: u32 = 30; // only applicable to first block
+const OFFCODE_MAX: u8 = 30; // only applicable to first block
 unsafe fn ZDICT_analyzeEntropy(
     dstBuffer: *mut core::ffi::c_void,
     maxDstSize: size_t,
@@ -753,9 +733,12 @@ unsafe fn ZDICT_analyzeEntropy(
     dictBufferSize: size_t,
     notificationLevel: core::ffi::c_uint,
 ) -> Result<size_t, Error> {
+    let mut cctx = Box::new_uninit();
+    ZSTD_initCCtx(cctx.as_mut_ptr(), ZSTD_customMem::default());
+
     let mut esr = EStats_ress_t {
         dict: core::ptr::null_mut(),
-        zc: core::ptr::null_mut(),
+        zc: cctx.assume_init(),
         workPlace: Box::default(),
     };
 
@@ -772,7 +755,7 @@ unsafe fn ZDICT_analyzeEntropy(
     );
 
     ZSTD_freeCDict(esr.dict);
-    ZSTD_freeCCtx(esr.zc);
+    ZSTD_freeCCtxContent(esr.zc.as_mut());
 
     eSize
 }
@@ -788,10 +771,10 @@ unsafe fn analyze_entropy_internal(
     notificationLevel: core::ffi::c_uint,
     esr: &mut EStats_ress_t,
 ) -> Result<size_t, Error> {
-    let mut hufTable: [HUF_CElt; 257] = [0; 257];
+    let mut hufTable = CTable::default();
 
     const KB: usize = 1 << 10;
-    let offcodeMax = ZSTD_highbit32(dictBufferSize.wrapping_add(128 * KB) as u32);
+    let offcodeMax = dictBufferSize.wrapping_add(128 * KB).ilog2() as u8;
     if offcodeMax > OFFCODE_MAX {
         return Err(Error::dictionaryCreation_failed); // dictionary too large
     }
@@ -833,9 +816,9 @@ unsafe fn analyze_entropy_internal(
         params.cParams,
         ZSTD_customMem::default(),
     );
-    esr.zc = ZSTD_createCCtx();
+
     esr.workPlace = Box::new_uninit_slice(ZSTD_BLOCKSIZE_MAX as size_t);
-    if (esr.dict).is_null() || (esr.zc).is_null() {
+    if (esr.dict).is_null() {
         if notificationLevel >= 1 {
             eprintln!("Not enough memory");
         }
@@ -869,19 +852,18 @@ unsafe fn analyze_entropy_internal(
     let mut wksp = [0u32; HUF_CTABLE_WORKSPACE_SIZE_U32];
     let huffLog = 11;
     let mut maxNbBits = HUF_buildCTable_wksp(
-        hufTable.as_mut_ptr(),
-        countLit.as_mut_ptr(),
+        &mut hufTable,
+        &countLit,
         255,
         huffLog,
         wksp.as_mut_ptr() as *mut core::ffi::c_void,
-        ::core::mem::size_of::<[u32; HUF_CTABLE_WORKSPACE_SIZE_U32]>(),
-    );
-    if let Some(err) = Error::from_error_code(maxNbBits) {
+        size_of::<[u32; HUF_CTABLE_WORKSPACE_SIZE_U32]>(),
+    )
+    .inspect_err(|_| {
         if notificationLevel >= 1 {
             eprintln!(" HUF_buildCTable error");
         }
-        return Err(err);
-    }
+    })?;
     if maxNbBits == 8 {
         // not compressible: will fail on HUF_writeCTable
         if notificationLevel >= 2 {
@@ -889,13 +871,19 @@ unsafe fn analyze_entropy_internal(
         }
         ZDICT_flatLit(&mut countLit); // replace distribution by a fake "mostly flat but still compressible" distribution, that HUF_writeCTable can encode
         maxNbBits = HUF_buildCTable_wksp(
-            hufTable.as_mut_ptr(),
-            countLit.as_mut_ptr(),
+            &mut hufTable,
+            &countLit,
             255,
             huffLog,
             wksp.as_mut_ptr() as *mut core::ffi::c_void,
-            ::core::mem::size_of::<[u32; HUF_CTABLE_WORKSPACE_SIZE_U32]>(),
-        );
+            size_of::<[u32; HUF_CTABLE_WORKSPACE_SIZE_U32]>(),
+        )
+        .inspect_err(|_| {
+            if notificationLevel >= 1 {
+                eprintln!(" HUF_buildCTable error");
+            }
+        })?;
+        debug_assert_eq!(maxNbBits, 9);
     }
     let huffLog = maxNbBits as u32;
 
@@ -905,72 +893,65 @@ unsafe fn analyze_entropy_internal(
     }
 
     let total: u32 = offcodeCount[..offcodeMax as usize + 1].iter().sum();
-    let errorCode = FSE_normalizeCount(
-        offcodeNCount.as_mut_ptr(),
+    let offLog = FSE_normalizeCount(
+        &mut offcodeNCount,
         OffFSELog,
-        offcodeCount.as_mut_ptr(),
+        &offcodeCount,
         total as size_t,
         offcodeMax,
-        1,
-    );
-    if let Some(err) = Error::from_error_code(errorCode) {
+        true,
+    )
+    .inspect_err(|_| {
         if notificationLevel >= 1 {
             eprintln!("FSE_normalizeCount error with offcodeCount");
         }
-        return Err(err);
-    }
-    let offLog = errorCode as u32;
+    })?;
 
     let total: u32 = matchLengthCount.iter().sum();
-    let errorCode = FSE_normalizeCount(
-        matchLengthNCount.as_mut_ptr(),
+    let mlLog = FSE_normalizeCount(
+        &mut matchLengthNCount,
         MLFSELog,
-        matchLengthCount.as_mut_ptr(),
+        &matchLengthCount,
         total as size_t,
         MaxML,
-        1,
-    );
-    if let Some(err) = Error::from_error_code(errorCode) {
+        true,
+    )
+    .inspect_err(|_| {
         if notificationLevel >= 1 {
             eprintln!("FSE_normalizeCount error with matchLengthCount");
         }
-        return Err(err);
-    }
-    let mlLog = errorCode as u32;
+    })?;
 
     let total: u32 = litLengthCount.iter().sum();
-    let errorCode = FSE_normalizeCount(
-        litLengthNCount.as_mut_ptr(),
+    let llLog = FSE_normalizeCount(
+        &mut litLengthNCount,
         LLFSELog,
-        litLengthCount.as_mut_ptr(),
+        &litLengthCount,
         total as size_t,
         MaxLL,
-        1,
-    );
-    if let Some(err) = Error::from_error_code(errorCode) {
+        true,
+    )
+    .inspect_err(|_| {
         if notificationLevel >= 1 {
             eprintln!("FSE_normalizeCount error with litLengthCount");
         }
-        return Err(err);
-    }
-    let llLog = errorCode as u32;
+    })?;
 
     // write result to buffer
     let hhSize = HUF_writeCTable_wksp(
         dstPtr as *mut core::ffi::c_void,
         maxDstSize,
-        hufTable.as_mut_ptr(),
+        &hufTable,
         255,
         huffLog,
         wksp.as_mut_ptr() as *mut core::ffi::c_void,
-        ::core::mem::size_of::<[u32; HUF_CTABLE_WORKSPACE_SIZE_U32]>(),
-    );
-    if let Some(err) = Error::from_error_code(hhSize) {
+        size_of::<[u32; HUF_CTABLE_WORKSPACE_SIZE_U32]>(),
+    )
+    .inspect_err(|_| {
         if notificationLevel >= 1 {
             eprintln!("HUF_writeCTable error");
         }
-        return Err(err);
-    }
+    })?;
     dstPtr = dstPtr.add(hhSize);
     maxDstSize = maxDstSize.wrapping_sub(hhSize);
     let mut eSize = hhSize;
@@ -978,16 +959,15 @@ unsafe fn analyze_entropy_internal(
     let ohSize = FSE_writeNCount(
         dstPtr as *mut core::ffi::c_void,
         maxDstSize,
-        offcodeNCount.as_mut_ptr(),
+        &offcodeNCount,
         OFFCODE_MAX,
         offLog,
-    );
-    if let Some(err) = Error::from_error_code(ohSize) {
+    )
+    .inspect_err(|_| {
         if notificationLevel >= 1 {
             eprintln!("FSE_writeNCount error with offcodeNCount");
         }
-        return Err(err);
-    }
+    })?;
     dstPtr = dstPtr.add(ohSize);
     maxDstSize = maxDstSize.wrapping_sub(ohSize);
     eSize = eSize.wrapping_add(ohSize);
@@ -995,16 +975,15 @@ unsafe fn analyze_entropy_internal(
     let mhSize = FSE_writeNCount(
         dstPtr as *mut core::ffi::c_void,
         maxDstSize,
-        matchLengthNCount.as_mut_ptr(),
+        &matchLengthNCount,
         MaxML,
         mlLog,
-    );
-    if let Some(err) = Error::from_error_code(mhSize) {
+    )
+    .inspect_err(|_| {
         if notificationLevel >= 1 {
             eprintln!("FSE_writeNCount error with matchLengthNCount ");
         }
-        return Err(err);
-    }
+    })?;
     dstPtr = dstPtr.add(mhSize);
     maxDstSize = maxDstSize.wrapping_sub(mhSize);
     eSize = eSize.wrapping_add(mhSize);
@@ -1012,16 +991,15 @@ unsafe fn analyze_entropy_internal(
     let lhSize = FSE_writeNCount(
         dstPtr as *mut core::ffi::c_void,
         maxDstSize,
-        litLengthNCount.as_mut_ptr(),
+        &litLengthNCount,
         MaxLL,
         llLog,
-    );
-    if let Some(err) = Error::from_error_code(lhSize) {
+    )
+    .inspect_err(|_| {
         if notificationLevel >= 1 {
             eprintln!("FSE_writeNCount error with litlengthNCount ");
         }
-        return Err(err);
-    }
+    })?;
     dstPtr = dstPtr.add(lhSize);
     maxDstSize = maxDstSize.wrapping_sub(lhSize);
     eSize = eSize.wrapping_add(lhSize);
@@ -1078,7 +1056,7 @@ pub unsafe extern "C" fn ZDICT_finalizeDictionary(
 
 const HBUFFSIZE: usize = 256; // should be large enough for all entropy headers
 
-unsafe fn finalize_dictionary(
+pub(super) unsafe fn finalize_dictionary(
     dictBuffer: *mut core::ffi::c_void,
     dictBufferCapacity: size_t,
     customDictContent: *const core::ffi::c_void,

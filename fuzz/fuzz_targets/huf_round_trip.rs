@@ -1,4 +1,5 @@
 #![no_main]
+#![allow(non_snake_case)]
 
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
@@ -81,10 +82,7 @@ fn adjust_table_log(table_log: usize, max_symbol: usize) -> usize {
 fuzz_target!(|input: HufRoundTripInput| {
     // Limit input size to 256KB like the C version
     const MAX_SIZE: usize = 256 * 1024;
-    let mut size = input.data.len();
-    if size > MAX_SIZE {
-        size = MAX_SIZE;
-    }
+    let size = Ord::min(input.data.len(), MAX_SIZE);
 
     // C version checks size <= 1
     if size <= 1 {
@@ -99,28 +97,20 @@ fuzz_target!(|input: HufRoundTripInput| {
     }
 
     // Clamp table_log to valid range (1-12)
-    let mut table_log = (input.table_log as c_uint % 12).max(1);
+    let mut table_log = input.table_log as c_uint % 12 + 1;
 
     // Step 1: Get histogram
-    const HUF_SYMBOLVALUE_MAX: c_uint = 255;
+    const HUF_SYMBOLVALUE_MAX: u8 = 255;
     let mut count = vec![0u32; 256];
     let mut max_symbol = HUF_SYMBOLVALUE_MAX;
 
     let most_frequent = unsafe {
-        lib::compress::hist::HIST_count(
-            count.as_mut_ptr(),
-            &mut max_symbol,
-            input.data[..size].as_ptr().cast(),
-            size,
-        )
+        lib::compress::hist::HIST_count(count.as_mut_ptr(), &mut max_symbol, &input.data[..size])
+            .unwrap()
     };
 
-    // Skip if error or RLE (all bytes the same)
-    if ZSTD_isError(most_frequent) == 1 || most_frequent == size {
-        return;
-    }
-
-    if max_symbol <= 255 {
+    // Skip RLE (all bytes the same)
+    if most_frequent as usize == size {
         return;
     }
 
@@ -133,8 +123,19 @@ fuzz_target!(|input: HufRoundTripInput| {
     let mut c_buf = vec![0u8; cbuf_size];
 
     // Compression table size: (maxSymbol + 2) * sizeof(usize)
-    let ct_size = HUF_CTABLE_SIZE(max_symbol as usize);
-    let mut ct = vec![0u8; ct_size];
+    let mut ct = CTable::default();
+
+    // C code does: dt[0] = tableLog * 0x01000001
+    // This initializes the DTable description with the tableLog
+    // In Rust, we need to set this via the description field
+    let mut dt = lib::decompress::huf_decompress::DTable::default();
+    let [maxTableLog, tableType, tableLog, reserved] = (table_log * 0x01000001).to_le_bytes();
+    dt.description = lib::decompress::huf_decompress::DTableDesc {
+        maxTableLog,
+        tableType,
+        tableLog,
+        reserved,
+    };
 
     // Step 4: Optimize table log
     let table_log = unsafe {
@@ -144,57 +145,42 @@ fuzz_target!(|input: HufRoundTripInput| {
             max_symbol,
             workspace.as_mut_ptr().cast(),
             HUF_WORKSPACE_SIZE,
-            ct.as_mut_ptr() as *mut usize,
-            count.as_ptr(),
+            &mut ct,
+            &count,
             flags,
         )
     };
+    assert!(table_log <= 12);
 
     // Step 5: Build compression table (returns actual tableLog)
     let table_log = unsafe {
         lib::compress::huf_compress::HUF_buildCTable_wksp(
-            ct.as_mut_ptr() as *mut usize,
-            count.as_ptr(),
+            &mut ct,
+            &count,
             max_symbol,
             table_log,
             workspace.as_mut_ptr().cast(),
             HUF_WORKSPACE_SIZE,
         )
+        .unwrap()
     };
 
-    if ZSTD_isError(table_log) == 1 {
-        return;
-    }
-
     // Step 6: Write compression table to buffer
-    let table_size = unsafe {
+    let Ok(table_size) = (unsafe {
         lib::compress::huf_compress::HUF_writeCTable_wksp(
             c_buf.as_mut_ptr().cast(),
             cbuf_size,
-            ct.as_ptr() as *const usize,
+            &ct,
             max_symbol,
             table_log as c_uint,
             workspace.as_mut_ptr().cast(),
             HUF_WORKSPACE_SIZE,
         )
+    }) else {
+        return;
     };
 
-    if ZSTD_isError(table_size) == 1 {
-        return;
-    }
-
     // Step 7: Read decompression table (X1 or X2)
-    let mut dt = lib::decompress::huf_decompress::DTable::default();
-
-    // C code does: dt[0] = tableLog * 0x01000001
-    // This initializes the DTable description with the tableLog
-    // In Rust, we need to set this via the description field
-    let desc_value = (table_log as u32) * 0x01000001;
-    dt.description.maxTableLog = (desc_value & 0xFF) as u8;
-    dt.description.tableType = ((desc_value >> 8) & 0xFF) as u8;
-    dt.description.tableLog = ((desc_value >> 16) & 0xFF) as u8;
-    dt.description.reserved = ((desc_value >> 24) & 0xFF) as u8;
-
     let dt_read_size = if input.symbols {
         // Try X2 first
         let mut x2_workspace: lib::decompress::huf_decompress::HUF_ReadDTableX2_Workspace =
@@ -204,24 +190,20 @@ fuzz_target!(|input: HufRoundTripInput| {
             &c_buf[..table_size],
             &mut x2_workspace,
             flags,
-        );
+        )
+        .unwrap_or_else(|err| err.to_error_code());
 
         // Fall back to X1 if tableLog_tooLarge
-        if ZSTD_isError(result) == 1 {
-            let err_code = ERR_getErrorCode(result);
-            if err_code == ZSTD_error_tableLog_tooLarge as u32 {
-                // tableLog_tooLarge error code
-                let mut x1_workspace: lib::decompress::Workspace =
-                    lib::decompress::Workspace::default();
-                lib::decompress::huf_decompress::HUF_readDTableX1_wksp(
-                    &mut dt,
-                    &c_buf[..table_size],
-                    &mut x1_workspace,
-                    flags,
-                )
-            } else {
-                return; // Other error
-            }
+        if ERR_getErrorCode(result) == ZSTD_error_tableLog_tooLarge {
+            let mut x1_workspace: lib::decompress::Workspace =
+                lib::decompress::Workspace::default();
+            lib::decompress::huf_decompress::HUF_readDTableX1_wksp(
+                &mut dt,
+                &c_buf[..table_size],
+                &mut x1_workspace,
+                flags,
+            )
+            .unwrap_or_else(|err| err.to_error_code())
         } else {
             result
         }
@@ -234,11 +216,13 @@ fuzz_target!(|input: HufRoundTripInput| {
             &mut x1_workspace,
             flags,
         )
+        .unwrap_or_else(|err| err.to_error_code())
     };
 
-    if ZSTD_isError(dt_read_size) == 1 {
-        return;
-    }
+    assert!(
+        !ERR_isError(dt_read_size),
+        "reading the decompression table failed"
+    );
 
     // Step 8: Compress the data (overwrites cBuf)
     let compress_size = unsafe {
@@ -247,9 +231,8 @@ fuzz_target!(|input: HufRoundTripInput| {
             lib::compress::huf_compress::HUF_compress1X_usingCTable(
                 c_buf.as_mut_ptr().cast(),
                 cbuf_size,
-                input.data[..size].as_ptr().cast(),
-                size,
-                ct.as_ptr() as *const usize,
+                &input.data[..size],
+                &ct,
                 flags,
             )
         } else {
@@ -257,17 +240,13 @@ fuzz_target!(|input: HufRoundTripInput| {
             lib::compress::huf_compress::HUF_compress4X_usingCTable(
                 c_buf.as_mut_ptr().cast(),
                 cbuf_size,
-                input.data[..size].as_ptr().cast(),
-                size,
-                ct.as_ptr() as *const usize,
+                &input.data[..size],
+                &ct,
                 flags,
             )
         }
-    };
-
-    if ZSTD_isError(compress_size) == 1 {
-        return;
     }
+    .expect("compression failed");
 
     // C code skips decompression if cSize == 0
     if compress_size == 0 {
@@ -287,6 +266,7 @@ fuzz_target!(|input: HufRoundTripInput| {
             &dt,
             flags,
         )
+        .expect("decompression should succeed")
     } else {
         // 4X streams
         lib::decompress::huf_decompress::HUF_decompress4X_usingDTable(
@@ -295,13 +275,10 @@ fuzz_target!(|input: HufRoundTripInput| {
             &dt,
             flags,
         )
+        .expect("decompression should succeed")
     };
 
     // Step 10: Verify decompression
-    if ZSTD_isError(decompress_size) == 1 {
-        panic!("Decompression failed");
-    }
-
     assert_eq!(
         decompress_size, size,
         "Decompressed size doesn't match original"

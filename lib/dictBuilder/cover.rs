@@ -8,13 +8,15 @@ use libc::size_t;
 
 use crate::lib::common::bits::ZSTD_highbit32;
 use crate::lib::common::error_private::{ERR_isError, Error};
+use crate::lib::common::mem::MEM_64bits;
 use crate::lib::common::pool::{POOL_add, POOL_create, POOL_free};
 use crate::lib::compress::zstd_compress::{
-    ZSTD_CCtx, ZSTD_CDict, ZSTD_compressBound, ZSTD_compress_usingCDict, ZSTD_createCCtx,
-    ZSTD_createCDict, ZSTD_freeCCtx, ZSTD_freeCDict,
+    ZSTD_compressBound, ZSTD_compress_usingCDict, ZSTD_createCDict, ZSTD_freeCCtxContent,
+    ZSTD_freeCDict, ZSTD_initCCtx,
 };
-use crate::lib::dictBuilder::zdict::{ZDICT_finalizeDictionary, ZDICT_isError};
+use crate::lib::dictBuilder::zdict::finalize_dictionary;
 use crate::lib::zdict::experimental::{ZDICT_cover_params_t, ZDICT_DICTSIZE_MIN};
+use crate::lib::zstd::ZSTD_customMem;
 use crate::ZDICT_params_t;
 
 #[repr(C)]
@@ -76,7 +78,7 @@ struct COVER_ctx_t<'a> {
     displayLevel: core::ffi::c_int,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default)]
 #[repr(C)]
 pub(super) struct COVER_segment_t {
     pub(super) begin: u32,
@@ -137,6 +139,13 @@ pub(super) struct COVER_dictSelection_t {
     dictSize: size_t,
     totalCompressedSize: size_t,
 }
+
+/// There are 32-bit indexes used to ref samples, so limit samples size to 4GB
+/// on 64-bit builds.
+/// For 32-bit builds we choose 1 GB: most 32-bit platforms have 2GB user-mode
+/// addressable space and we allocate a large contiguous buffer, so 1GB is
+/// already a high limit.
+const COVER_MAX_SAMPLES_SIZE: usize = if MEM_64bits() { u32::MAX as _ } else { 1 << 30 };
 const COVER_DEFAULT_SPLITPOINT: core::ffi::c_double = 1.0f64;
 
 fn COVER_map_clear(map: &mut COVER_map_t) {
@@ -270,10 +279,8 @@ unsafe extern "C" fn COVER_strict_cmp8(
     }) as _
 }
 
-crate::cfg_select! {
-    miri => {
-        /* a fallback implementation is used */
-    }
+crate::lib::polyfill::cfg_select! {
+    miri => { /* a fallback implementation is used */ }
     target_vendor = "apple" => {
         extern "C" {
             fn qsort_r(
@@ -307,9 +314,7 @@ crate::cfg_select! {
             );
         }
     }
-    _ => {
-        /* a fallback implementation is used */
-    }
+    _ => { /* a fallback implementation is used */ }
 }
 
 type __compar_d_fn_t = unsafe extern "C" fn(
@@ -327,13 +332,14 @@ fn stableSort(ctx: &mut COVER_ctx_t) {
 
     debug_assert_eq!(ctx.suffixSize, ctx.suffix.len());
 
-    crate::cfg_select! {
+    #[rustfmt::skip]
+    crate::lib::polyfill::cfg_select! {
         all(not(miri), target_vendor = "apple") => {
             unsafe {
                 qsort_r(
                     ctx.suffix.as_mut_ptr() as *mut core::ffi::c_void,
                     ctx.suffix.len(),
-                    ::core::mem::size_of::<u32>(),
+                    size_of::<u32>(),
                     &raw mut *ctx as *mut core::ffi::c_void,
                     compare_fn,
                 );
@@ -344,7 +350,7 @@ fn stableSort(ctx: &mut COVER_ctx_t) {
                 qsort_s(
                     ctx.suffix.as_mut_ptr() as *mut core::ffi::c_void,
                     ctx.suffix.len(),
-                    ::core::mem::size_of::<u32>(),
+                    size_of::<u32>(),
                     compare_fn,
                     &raw mut *ctx as *mut core::ffi::c_void,
                 );
@@ -355,7 +361,7 @@ fn stableSort(ctx: &mut COVER_ctx_t) {
                 qsort_r(
                     ctx.suffix.as_mut_ptr() as *mut core::ffi::c_void,
                     ctx.suffix.len(),
-                    ::core::mem::size_of::<u32>(),
+                    size_of::<u32>(),
                     compare_fn,
                     &raw mut *ctx as *mut core::ffi::c_void,
                 );
@@ -363,8 +369,8 @@ fn stableSort(ctx: &mut COVER_ctx_t) {
         }
         _ => {
             ctx.suffix.sort_by(|lp, rp| {
-                let lhs = &ctx.samples[*lp as usize..][.. ctx.d as size_t];
-                let rhs = &ctx.samples[*rp as usize..][.. ctx.d as size_t];
+                let lhs = &ctx.samples[*lp as usize..][..ctx.d as size_t];
+                let rhs = &ctx.samples[*rp as usize..][..ctx.d as size_t];
 
                 lhs.cmp(rhs)
             });
@@ -444,29 +450,20 @@ fn COVER_selectSegment(
     let k = parameters.k;
     let d = parameters.d;
     let dmersInK = k.wrapping_sub(d).wrapping_add(1);
-    let mut bestSegment = {
-        COVER_segment_t {
-            begin: 0,
-            end: 0,
-            score: 0,
-        }
-    };
+    let mut bestSegment = COVER_segment_t::default();
+    COVER_map_clear(activeDmers);
     let mut activeSegment = COVER_segment_t {
-        begin: 0,
-        end: 0,
+        begin,
+        end: begin,
         score: 0,
     };
-    COVER_map_clear(activeDmers);
-    activeSegment.begin = begin;
-    activeSegment.end = begin;
-    activeSegment.score = 0;
-    while activeSegment.end < end {
-        let newDmer = ctx.dmerAt[activeSegment.end as usize];
+    for pos in begin..end {
+        let newDmer = ctx.dmerAt[pos as usize];
         let newDmerOcc = COVER_map_at(activeDmers, newDmer);
         if *newDmerOcc == 0 {
             activeSegment.score = (activeSegment.score).wrapping_add(freqs[newDmer as usize]);
         }
-        activeSegment.end = (activeSegment.end).wrapping_add(1);
+        activeSegment.end = pos.wrapping_add(1);
         *newDmerOcc = (*newDmerOcc).wrapping_add(1);
         if (activeSegment.end).wrapping_sub(activeSegment.begin) == dmersInK.wrapping_add(1) {
             let delDmer = ctx.dmerAt[activeSegment.begin as usize];
@@ -484,23 +481,17 @@ fn COVER_selectSegment(
     }
     let mut newBegin = bestSegment.end;
     let mut newEnd = bestSegment.begin;
-    let mut pos: u32 = 0;
-    pos = bestSegment.begin;
-    while pos != bestSegment.end {
+    for pos in bestSegment.begin..bestSegment.end {
         let freq = freqs[ctx.dmerAt[pos as usize] as usize];
         if freq != 0 {
             newBegin = if newBegin < pos { newBegin } else { pos };
             newEnd = pos.wrapping_add(1);
         }
-        pos = pos.wrapping_add(1);
     }
     bestSegment.begin = newBegin;
     bestSegment.end = newEnd;
-    let mut pos_0: u32 = 0;
-    pos_0 = bestSegment.begin;
-    while pos_0 != bestSegment.end {
-        freqs[ctx.dmerAt[pos_0 as usize] as usize] = 0;
-        pos_0 = pos_0.wrapping_add(1);
+    for pos in bestSegment.begin..bestSegment.end {
+        freqs[ctx.dmerAt[pos as usize] as usize] = 0;
     }
     bestSegment
 }
@@ -536,7 +527,7 @@ fn COVER_ctx_init<'a>(
     d: core::ffi::c_uint,
     splitPoint: core::ffi::c_double,
     displayLevel: core::ffi::c_int,
-) -> size_t {
+) -> Result<(), Error> {
     let nbSamples = samplesSizes.len();
     let totalSamplesSize = samples.len();
     let nbTrainSamples = if splitPoint < 1.0f64 {
@@ -560,31 +551,17 @@ fn COVER_ctx_init<'a>(
         totalSamplesSize
     };
     ctx.displayLevel = displayLevel;
-    if totalSamplesSize
-        < (if d as size_t > ::core::mem::size_of::<u64>() {
-            d as size_t
-        } else {
-            ::core::mem::size_of::<u64>()
-        })
-        || totalSamplesSize
-            >= (if ::core::mem::size_of::<size_t>() == 8 {
-                -(1 as core::ffi::c_int) as core::ffi::c_uint
-            } else {
-                (1 as core::ffi::c_int as core::ffi::c_uint).wrapping_mul((1) << 30)
-            }) as size_t
+    if totalSamplesSize < Ord::max(d as size_t, size_of::<u64>())
+        || totalSamplesSize >= COVER_MAX_SAMPLES_SIZE
     {
         if displayLevel >= 1 {
             eprintln!(
                 "Total samples size is too large ({} MB), maximum size is {} MB",
-                (totalSamplesSize >> 20) as core::ffi::c_uint,
-                (if ::core::mem::size_of::<size_t>() == 8 {
-                    -(1 as core::ffi::c_int) as core::ffi::c_uint
-                } else {
-                    (1 as core::ffi::c_uint).wrapping_mul((1) << 30)
-                }) >> 20,
+                totalSamplesSize >> 20,
+                COVER_MAX_SAMPLES_SIZE >> 20,
             );
         }
-        return Error::srcSize_wrong.to_error_code();
+        return Err(Error::srcSize_wrong);
     }
     if nbTrainSamples < 5 {
         if displayLevel >= 1 {
@@ -593,7 +570,7 @@ fn COVER_ctx_init<'a>(
                 nbTrainSamples,
             );
         }
-        return Error::srcSize_wrong.to_error_code();
+        return Err(Error::srcSize_wrong);
     }
     if nbTestSamples < 1 {
         if displayLevel >= 1 {
@@ -602,7 +579,7 @@ fn COVER_ctx_init<'a>(
                 nbTestSamples,
             );
         }
-        return Error::srcSize_wrong.to_error_code();
+        return Err(Error::srcSize_wrong);
     }
     *ctx = COVER_ctx_t::default();
     if displayLevel >= 2 {
@@ -623,10 +600,10 @@ fn COVER_ctx_init<'a>(
     ctx.nbTrainSamples = nbTrainSamples as size_t;
     ctx.nbTestSamples = nbTestSamples as size_t;
     ctx.suffixSize = trainingSamplesSize
-        .wrapping_sub(if d as size_t > ::core::mem::size_of::<u64>() {
+        .wrapping_sub(if d as size_t > size_of::<u64>() {
             d as size_t
         } else {
-            ::core::mem::size_of::<u64>()
+            size_of::<u64>()
         })
         .wrapping_add(1);
     ctx.suffix = (0..ctx.suffixSize as u32).collect();
@@ -634,13 +611,10 @@ fn COVER_ctx_init<'a>(
     ctx.offsets = Box::from(vec![0usize; nbSamples + 1]);
     ctx.freqs = Box::default();
     ctx.d = d;
-    let mut i: usize = 0;
     ctx.offsets[0] = 0;
-    i = 1;
-    while i <= nbSamples {
+    for i in 1..nbSamples + 1 {
         ctx.offsets[i] =
             ctx.offsets[i.wrapping_sub(1)].wrapping_add(samplesSizes[i.wrapping_sub(1)]);
-        i = i.wrapping_add(1);
     }
     if displayLevel >= 2 {
         eprintln!("Constructing partial suffix array");
@@ -660,7 +634,7 @@ fn COVER_ctx_init<'a>(
 
     core::mem::swap(&mut ctx.freqs, &mut ctx.suffix);
 
-    0
+    Ok(())
 }
 
 pub(super) fn COVER_warnOnSmallCorpus(
@@ -691,23 +665,15 @@ pub(super) fn COVER_computeEpochs(
     passes: u32,
 ) -> COVER_epoch_info_t {
     let minEpochSize = k * 10;
-    let mut epochs = COVER_epoch_info_t { num: 0, size: 0 };
-    epochs.num = if 1 > maxDictSize / k / passes {
-        1
+    let num = (maxDictSize / k / passes).max(1);
+    let size = nbDmers / num;
+    if size >= minEpochSize {
+        COVER_epoch_info_t { num, size }
     } else {
-        maxDictSize / k / passes
-    };
-    epochs.size = nbDmers / epochs.num;
-    if epochs.size >= minEpochSize {
-        return epochs;
+        let size = nbDmers.min(minEpochSize);
+        let num = nbDmers / size;
+        COVER_epoch_info_t { num, size }
     }
-    epochs.size = if minEpochSize < nbDmers {
-        minEpochSize
-    } else {
-        nbDmers
-    };
-    epochs.num = nbDmers / epochs.size;
-    epochs
 }
 
 fn COVER_buildDictionary<'a>(
@@ -726,7 +692,6 @@ fn COVER_buildDictionary<'a>(
     );
     let maxZeroScoreRun = (epochs.num >> 3).clamp(10, 100) as size_t;
     let mut zeroScoreRun = 0 as size_t;
-    let mut epoch: size_t = 0;
     let mut last_update_time = Instant::now();
     let displayLevel = ctx.displayLevel;
     if displayLevel >= 2 {
@@ -735,11 +700,10 @@ fn COVER_buildDictionary<'a>(
             epochs.num, epochs.size,
         );
     }
-    epoch = 0;
+    let mut epoch: size_t = 0;
     while tail > 0 {
         let epochBegin = (epoch * epochs.size as size_t) as u32;
         let epochEnd = epochBegin.wrapping_add(epochs.size);
-        let mut segmentSize: size_t = 0;
         let segment =
             COVER_selectSegment(ctx, freqs, activeDmers, epochBegin, epochEnd, parameters);
         if segment.score == 0 {
@@ -750,7 +714,7 @@ fn COVER_buildDictionary<'a>(
         } else {
             zeroScoreRun = 0;
             /* Trim the segment if necessary and if it is too small then we are done */
-            segmentSize = Ord::min(
+            let segmentSize = Ord::min(
                 (segment.end - segment.begin + parameters.d - 1) as usize,
                 tail,
             );
@@ -890,16 +854,15 @@ fn train_from_buffer_cover(
         return Error::dstSize_tooSmall.to_error_code();
     }
 
-    let initVal = COVER_ctx_init(
+    if let Err(err) = COVER_ctx_init(
         &mut ctx,
         samples,
         samplesSizes,
         parameters.d,
         parameters.splitPoint,
         displayLevel,
-    );
-    if ERR_isError(initVal) {
-        return initVal;
+    ) {
+        return err.to_error_code();
     }
     COVER_warnOnSmallCorpus(dictBufferCapacity, ctx.suffix.len(), displayLevel);
     let mut activeDmers =
@@ -916,17 +879,17 @@ fn train_from_buffer_cover(
     let dictBuffer = dict.as_mut_ptr() as *mut core::ffi::c_void;
     let customDictContent = dictBuffer.wrapping_add(dictBufferCapacity - customDictContentSize);
     let dictionarySize = unsafe {
-        ZDICT_finalizeDictionary(
+        finalize_dictionary(
             dictBuffer,
             dictBufferCapacity,
             customDictContent,
             customDictContentSize,
-            samples.as_ptr() as *const core::ffi::c_void,
-            samplesSizes.as_ptr(),
-            samplesSizes.len() as core::ffi::c_uint,
+            &samples[..samplesSizes.iter().sum()],
+            samplesSizes,
             parameters.zParams,
         )
-    };
+    }
+    .unwrap_or_else(|err| err.to_error_code());
     if !ERR_isError(dictionarySize) && displayLevel >= 2 {
         eprintln!("Constructed dictionary of size {}", dictionarySize,);
     }
@@ -942,49 +905,39 @@ pub(super) fn COVER_checkTotalCompressedSize(
     offsets: &[size_t],
     nbTrainSamples: size_t,
     nbSamples: size_t,
-    dict: *mut u8,
-    dictBufferCapacity: size_t,
-) -> size_t {
-    let mut totalCompressedSize = Error::GENERIC.to_error_code();
-    let mut cctx = core::ptr::null_mut::<ZSTD_CCtx>();
-    let mut cdict = core::ptr::null_mut::<ZSTD_CDict>();
-    let mut dstCapacity: size_t = 0;
-    let mut i: size_t = 0;
-    let mut maxSampleSize = 0;
-    i = if parameters.splitPoint < 1.0f64 {
+    dict: &[u8],
+) -> Result<size_t, Error> {
+    let start = if parameters.splitPoint < 1.0f64 {
         nbTrainSamples
     } else {
         0
     };
-    while i < nbSamples {
-        maxSampleSize = if samplesSizes[i] > maxSampleSize {
-            samplesSizes[i]
-        } else {
-            maxSampleSize
-        };
-        i = i.wrapping_add(1);
-    }
-    dstCapacity = ZSTD_compressBound(maxSampleSize);
+    let maxSampleSize = samplesSizes[start..nbSamples]
+        .iter()
+        .copied()
+        .max()
+        .unwrap_or(0);
+    let dstCapacity = ZSTD_compressBound(maxSampleSize);
     let mut dst: Box<[MaybeUninit<u8>]> = Box::new_uninit_slice(dstCapacity);
-    cctx = unsafe { ZSTD_createCCtx() };
-    cdict = unsafe {
+
+    let mut cctx = Box::new_uninit();
+    unsafe { ZSTD_initCCtx(cctx.as_mut_ptr(), ZSTD_customMem::default()) };
+    let mut cctx = unsafe { cctx.assume_init() };
+
+    let cdict = unsafe {
         ZSTD_createCDict(
-            dict as *const core::ffi::c_void,
-            dictBufferCapacity,
+            dict.as_ptr() as *const core::ffi::c_void,
+            dict.len(),
             parameters.zParams.compressionLevel,
         )
     };
-    if !(cctx.is_null() || cdict.is_null()) {
-        totalCompressedSize = dictBufferCapacity;
-        i = if parameters.splitPoint < 1.0f64 {
-            nbTrainSamples
-        } else {
-            0
-        };
-        while i < nbSamples {
+    let totalCompressedSize = if cdict.is_null() {
+        Err(Error::GENERIC)
+    } else {
+        (start..nbSamples).try_fold(dict.len(), |totalCompressedSize, i| {
             let size = unsafe {
                 ZSTD_compress_usingCDict(
-                    cctx,
+                    &mut *cctx,
                     dst.as_mut_ptr().cast::<core::ffi::c_void>(),
                     dstCapacity,
                     samples[offsets[i]..].as_ptr() as *const core::ffi::c_void,
@@ -992,16 +945,13 @@ pub(super) fn COVER_checkTotalCompressedSize(
                     cdict,
                 )
             };
-            if ERR_isError(size) {
-                totalCompressedSize = size;
-                break;
-            } else {
-                totalCompressedSize = totalCompressedSize.wrapping_add(size);
-                i = i.wrapping_add(1);
+            if let Some(err) = Error::from_error_code(size) {
+                return Err(err);
             }
-        }
-    }
-    unsafe { ZSTD_freeCCtx(cctx) };
+            Ok(totalCompressedSize.wrapping_add(size))
+        })
+    };
+    unsafe { ZSTD_freeCCtxContent(&mut *cctx) };
     unsafe { ZSTD_freeCDict(cdict) };
     drop(dst);
     totalCompressedSize
@@ -1029,10 +979,9 @@ pub(super) fn COVER_best_finish(
 ) {
     let compressedSize = selection.totalCompressedSize;
     let dictSize = selection.dictSize;
-    let mut liveJobs: size_t = 0;
     let mut guard = best.mutex.lock().unwrap();
     guard.liveJobs = (guard.liveJobs).wrapping_sub(1);
-    liveJobs = guard.liveJobs;
+    let liveJobs = guard.liveJobs;
     if compressedSize < guard.compressedSize {
         if let Some(slice) = guard.dict.get_mut(..selection.dictContent.len()) {
             slice.copy_from_slice(&selection.dictContent);
@@ -1057,24 +1006,13 @@ fn setDictSelection(buf: Box<[u8]>, s: size_t, csz: size_t) -> COVER_dictSelecti
     }
 }
 
-pub(super) fn COVER_dictSelectionError(error: size_t) -> COVER_dictSelection_t {
-    setDictSelection(Box::default(), 0, error)
-}
-
-pub(super) fn COVER_dictSelectionIsError(selection: &COVER_dictSelection_t) -> bool {
-    // NOTE: is_empty is a proxy for NULL in the C code. It indicates that the dictContent was not
-    // set, which is almost certainly a programmer error if it ever comes up.
-    ERR_isError(selection.totalCompressedSize) || selection.dictContent.is_empty()
-}
-
-pub(super) fn COVER_dictSelectionFree(selection: COVER_dictSelection_t) {
-    drop(selection)
+pub(super) fn COVER_dictSelectionError(error: Error) -> COVER_dictSelection_t {
+    setDictSelection(Box::default(), 0, error.to_error_code())
 }
 
 pub(super) fn COVER_selectDict(
     customDictContent: &[u8],
     dictBufferCapacity: size_t,
-    mut dictContentSize: size_t,
     samplesBuffer: &[u8],
     samplesSizes: &[size_t],
     nbFinalizeSamples: core::ffi::c_uint,
@@ -1082,75 +1020,60 @@ pub(super) fn COVER_selectDict(
     nbSamples: size_t,
     params: ZDICT_cover_params_t,
     offsets: &[size_t],
-    mut totalCompressedSize: size_t,
-) -> COVER_dictSelection_t {
-    let mut largestDict = 0;
-    let mut largestCompressed = 0;
+) -> Result<COVER_dictSelection_t, Error> {
+    let finalizeSamplesSizes = &samplesSizes[..nbFinalizeSamples as usize];
+    let finalizeSamples = &samplesBuffer[..finalizeSamplesSizes.iter().sum()];
+    let mut dictContentSize = customDictContent.len();
     let mut largestDictbuffer: Box<[u8]> = Box::from(vec![0u8; dictBufferCapacity]);
     let mut candidateDictBuffer: Box<[u8]> = Box::from(vec![0u8; dictBufferCapacity]);
     let regressionTolerance =
         params.shrinkDictMaxRegression as core::ffi::c_double / 100.0f64 + 1.00f64;
     largestDictbuffer[..customDictContent.len()].copy_from_slice(customDictContent);
     dictContentSize = unsafe {
-        ZDICT_finalizeDictionary(
+        finalize_dictionary(
             largestDictbuffer.as_mut_ptr() as *mut core::ffi::c_void,
             dictBufferCapacity,
             customDictContent.as_ptr() as *const core::ffi::c_void,
             dictContentSize,
-            samplesBuffer.as_ptr() as *const core::ffi::c_void,
-            samplesSizes.as_ptr(),
-            nbFinalizeSamples,
+            finalizeSamples,
+            finalizeSamplesSizes,
             params.zParams,
-        )
+        )?
     };
-    if ZDICT_isError(dictContentSize) != 0 {
-        drop(largestDictbuffer);
-        drop(candidateDictBuffer);
-        return COVER_dictSelectionError(dictContentSize);
-    }
-    totalCompressedSize = COVER_checkTotalCompressedSize(
+    let mut totalCompressedSize = COVER_checkTotalCompressedSize(
         params,
         samplesSizes,
         samplesBuffer,
         offsets,
         nbCheckSamples,
         nbSamples,
-        largestDictbuffer.as_mut_ptr(),
-        dictContentSize,
-    );
-    if ERR_isError(totalCompressedSize) {
-        drop(largestDictbuffer);
-        drop(candidateDictBuffer);
-        return COVER_dictSelectionError(totalCompressedSize);
-    }
+        &largestDictbuffer[..dictContentSize],
+    )?;
     if params.shrinkDict == 0 {
-        drop(candidateDictBuffer);
-        return setDictSelection(largestDictbuffer, dictContentSize, totalCompressedSize);
+        return Ok(setDictSelection(
+            largestDictbuffer,
+            dictContentSize,
+            totalCompressedSize,
+        ));
     }
-    largestDict = dictContentSize;
-    largestCompressed = totalCompressedSize;
+    let largestDict = dictContentSize;
+    let largestCompressed = totalCompressedSize;
     dictContentSize = ZDICT_DICTSIZE_MIN;
     while dictContentSize < largestDict {
         candidateDictBuffer[..largestDict].copy_from_slice(&largestDictbuffer[..largestDict]);
         dictContentSize = unsafe {
-            ZDICT_finalizeDictionary(
+            finalize_dictionary(
                 candidateDictBuffer.as_mut_ptr() as *mut core::ffi::c_void,
                 dictBufferCapacity,
                 customDictContent[customDictContent.len() - dictContentSize..]
                     .as_ptr()
                     .cast(),
                 dictContentSize,
-                samplesBuffer.as_ptr() as *const core::ffi::c_void,
-                samplesSizes.as_ptr(),
-                nbFinalizeSamples,
+                finalizeSamples,
+                finalizeSamplesSizes,
                 params.zParams,
-            )
+            )?
         };
-        if ZDICT_isError(dictContentSize) != 0 {
-            drop(largestDictbuffer);
-            drop(candidateDictBuffer);
-            return COVER_dictSelectionError(dictContentSize);
-        }
         totalCompressedSize = COVER_checkTotalCompressedSize(
             params,
             samplesSizes,
@@ -1158,39 +1081,40 @@ pub(super) fn COVER_selectDict(
             offsets,
             nbCheckSamples,
             nbSamples,
-            candidateDictBuffer.as_mut_ptr(),
-            dictContentSize,
-        );
-        if ERR_isError(totalCompressedSize) {
-            drop(largestDictbuffer);
-            drop(candidateDictBuffer);
-            return COVER_dictSelectionError(totalCompressedSize);
-        }
+            &candidateDictBuffer[..dictContentSize],
+        )?;
         if totalCompressedSize as core::ffi::c_double
             <= largestCompressed as core::ffi::c_double * regressionTolerance
         {
-            drop(largestDictbuffer);
-            return setDictSelection(candidateDictBuffer, dictContentSize, totalCompressedSize);
+            return Ok(setDictSelection(
+                candidateDictBuffer,
+                dictContentSize,
+                totalCompressedSize,
+            ));
         }
         dictContentSize *= 2;
     }
-    dictContentSize = largestDict;
-    totalCompressedSize = largestCompressed;
-    drop(candidateDictBuffer);
-    setDictSelection(largestDictbuffer, dictContentSize, totalCompressedSize)
+
+    Ok(setDictSelection(
+        largestDictbuffer,
+        largestDict,
+        largestCompressed,
+    ))
 }
 
-unsafe fn COVER_tryParameters_wrapper(opaque: *mut core::ffi::c_void) {
+fn COVER_tryParameters_wrapper(opaque: *mut core::ffi::c_void) {
     COVER_tryParameters(unsafe { Box::from_raw(opaque.cast()) })
 }
 
+#[expect(
+    clippy::boxed_local,
+    reason = "Box is needed because the main thread may destroy `data.ctx` immediately after the completion signal from `COVER_best_finish`"
+)]
 fn COVER_tryParameters(data: Box<COVER_tryParameters_data_t>) {
     let ctx = data.ctx;
     let parameters = data.parameters;
     let dictBufferCapacity = data.dictBufferCapacity;
-    let totalCompressedSize = Error::GENERIC.to_error_code();
     let mut dict: Box<[MaybeUninit<u8>]> = Box::new_uninit_slice(dictBufferCapacity);
-    let mut selection = COVER_dictSelectionError(Error::GENERIC.to_error_code());
     let mut freqs = ctx.freqs.clone();
     let displayLevel = ctx.displayLevel;
     let mut activeDmers =
@@ -1198,10 +1122,9 @@ fn COVER_tryParameters(data: Box<COVER_tryParameters_data_t>) {
 
     let dict_tail = COVER_buildDictionary(ctx, &mut freqs, &mut activeDmers, &mut dict, parameters);
 
-    selection = COVER_selectDict(
+    let selection = COVER_selectDict(
         dict_tail,
         dictBufferCapacity,
-        dict_tail.len(),
         ctx.samples,
         ctx.samplesSizes,
         ctx.nbTrainSamples as core::ffi::c_uint,
@@ -1209,18 +1132,14 @@ fn COVER_tryParameters(data: Box<COVER_tryParameters_data_t>) {
         ctx.nbSamples,
         parameters,
         &ctx.offsets,
-        totalCompressedSize,
     );
 
-    if COVER_dictSelectionIsError(&selection) && displayLevel >= 1 {
+    if selection.is_err() && displayLevel >= 1 {
         eprintln!("Failed to select dictionary");
     }
     drop(dict);
+    let selection = selection.unwrap_or_else(COVER_dictSelectionError);
     COVER_best_finish(data.best, parameters, &selection);
-    drop(data);
-    COVER_map_destroy(&mut activeDmers);
-    COVER_dictSelectionFree(selection);
-    drop(freqs);
 }
 
 /// This function tries many parameter combinations (specifically, `k` and `d` combinations) and
@@ -1378,21 +1297,20 @@ unsafe fn optimize_train_from_buffer_cover(
             displayLevel - 1
         };
 
-        let initVal = COVER_ctx_init(
+        if let Err(err) = COVER_ctx_init(
             &mut ctx,
             samples,
             samplesSizes,
             d,
             splitPoint,
             childDisplayLevel,
-        );
-        if ERR_isError(initVal) {
+        ) {
             if displayLevel >= 1 {
                 eprintln!("Failed to initialize context");
             }
             drop(COVER_best_wait(&best));
             POOL_free(pool);
-            return initVal;
+            return err.to_error_code();
         }
         if !warned {
             COVER_warnOnSmallCorpus(dict.len(), ctx.suffix.len(), displayLevel);
@@ -1436,7 +1354,7 @@ unsafe fn optimize_train_from_buffer_cover(
                     POOL_add(
                         pool,
                         COVER_tryParameters_wrapper,
-                        Box::leak(data) as *mut _ as *mut core::ffi::c_void,
+                        Box::into_raw(data).cast(),
                     );
                 } else {
                     COVER_tryParameters(data);

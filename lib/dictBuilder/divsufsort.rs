@@ -12,17 +12,12 @@ fn sort_typeBstar(
     n: i32,
     _openMP: bool,
 ) -> i32 {
-    let mut i: i32 = 0;
-    let mut j: i32 = 0;
-    let mut k: i32 = 0;
-    let mut t: i32 = 0;
-    let mut m: i32 = 0;
-    let mut c0: i32 = 0;
-    let mut c1: i32 = 0;
+    let mut t: i32;
+    let mut c1: i32;
 
-    i = n - 1;
-    m = n;
-    c0 = T[(n - 1) as usize] as i32;
+    let mut i = n - 1;
+    let mut m = n;
+    let mut c0 = T[(n - 1) as usize] as i32;
     while 0 <= i {
         loop {
             c1 = c0;
@@ -52,35 +47,29 @@ fn sort_typeBstar(
         }
     }
     m = n - m;
-    c0 = 0;
     i = 0;
-    j = 0;
-    while c0 < ALPHABET_SIZE {
+    let mut j = 0;
+    for c0 in 0..ALPHABET_SIZE {
         t = i + bucket_A[c0 as usize];
         bucket_A[c0 as usize] = i + j;
         i = t + bucket_B[(c0 << 8 | c0) as usize];
-        c1 = c0 + 1;
-        while c1 < ALPHABET_SIZE {
+        for c1 in c0 + 1..ALPHABET_SIZE {
             j += bucket_B[(c0 << 8 | c1) as usize];
             bucket_B[(c0 << 8 | c1) as usize] = j;
             i += bucket_B[(c1 << 8 | c0) as usize];
-            c1 += 1;
         }
-        c0 += 1;
     }
 
     if (0) < m {
         let PAb = n - m;
         let ISAb = m;
-        i = m - 2;
-        while 0 <= i {
+        for i in (0..m - 1).rev() {
             t = SA[(PAb + i) as usize];
             c0 = T[t as usize] as i32;
             c1 = T[(t + 1) as usize] as i32;
             let fresh189 = &mut (bucket_B[(c0 << 8 | c1) as usize]);
             *fresh189 -= 1;
             SA[*fresh189 as usize] = i;
-            i -= 1;
         }
         t = SA[(PAb + (m - 1)) as usize];
         c0 = T[t as usize] as i32;
@@ -91,8 +80,7 @@ fn sort_typeBstar(
         c0 = ALPHABET_SIZE - 2;
         j = m;
         while (0) < j {
-            c1 = ALPHABET_SIZE - 1;
-            while c0 < c1 {
+            for c1 in (c0 + 1..ALPHABET_SIZE).rev() {
                 i = bucket_B[(c0 << 8 | c1) as usize];
                 if (1) < j - i {
                     let Ok([i_to_j, PAb]) = ({
@@ -107,7 +95,6 @@ fn sort_typeBstar(
                     sssort(T, PAb, i_to_j, 2, n);
                 }
                 j = i;
-                c1 -= 1;
             }
             c0 -= 1;
         }
@@ -169,12 +156,10 @@ fn sort_typeBstar(
             }
         }
         bucket_B[(((256 - 1) << 8) | (256 - 1)) as usize] = n;
-        c0 = ALPHABET_SIZE - 2;
-        k = m - 1;
-        while 0 <= c0 {
+        let mut k = m - 1;
+        for c0 in (0..ALPHABET_SIZE - 1).rev() {
             i = bucket_A[(c0 + 1) as usize] - 1;
-            c1 = ALPHABET_SIZE - 1;
-            while c0 < c1 {
+            for c1 in (c0 + 1..ALPHABET_SIZE).rev() {
                 t = i - bucket_B[(c1 << 8 | c0) as usize];
                 bucket_B[(c1 << 8 | c0) as usize] = i;
                 i = t;
@@ -184,11 +169,9 @@ fn sort_typeBstar(
                     i -= 1;
                     k -= 1;
                 }
-                c1 -= 1;
             }
             bucket_B[((c0 << 8) | (c0 + 1)) as usize] = i - bucket_B[(c0 << 8 | c0) as usize] + 1;
             bucket_B[(c0 << 8 | c0) as usize] = i;
-            c0 -= 1;
         }
     }
     m
@@ -202,18 +185,15 @@ fn construct_SA(
     n: i32,
     m: i32,
 ) {
-    let mut s: i32 = 0;
-    let mut c0: i32 = 0;
-    let mut c1: i32 = 0;
-    let mut c2: i32 = 0;
+    let mut s: i32;
+    let mut c0: i32;
+    let mut c2: i32;
     if (0) < m {
-        c1 = ALPHABET_SIZE - 2;
-        while 0 <= c1 {
+        for c1 in (0..ALPHABET_SIZE - 1).rev() {
             let mut k = i32::MIN;
             let i = bucket_B[((c1 << 8) | (c1 + 1)) as usize];
-            let mut j = bucket_A[(c1 + 1) as usize] - 1;
             c2 = -1;
-            while i <= j {
+            for j in (i..bucket_A[(c1 + 1) as usize]).rev() {
                 s = SA[j as usize];
                 if (0) < s {
                     assert_eq!(T[s as usize] as i32, c1);
@@ -240,9 +220,7 @@ fn construct_SA(
                     assert!(s == 0 && T[s as usize] as i32 == c1 || s < 0);
                     SA[j as usize] = !s;
                 }
-                j -= 1;
             }
-            c1 -= 1;
         }
     }
     c2 = T[(n - 1) as usize] as i32;
@@ -255,10 +233,7 @@ fn construct_SA(
     };
     k += 1;
 
-    let mut i = 0;
-    let j = n as usize;
-
-    while i < j {
+    for i in 0..n as usize {
         s = SA[i];
         if (0) < s {
             assert!(T[(s - 1) as usize] as i32 >= T[s as usize] as i32);
@@ -279,7 +254,6 @@ fn construct_SA(
             assert!(s < 0);
             SA[i] = !s;
         }
-        i += 1;
     }
 }
 
@@ -287,15 +261,13 @@ pub(super) fn divsufsort(T: &[u8], SA: &mut [i32], openMP: bool) -> i32 {
     assert_eq!(T.len(), SA.len());
     let n = T.len();
 
-    let mut m: i32 = 0;
-
     if n == 0 {
         return 0;
     } else if n == 1 {
         SA[0] = 0;
         return 0;
     } else if n == 2 {
-        m = ((T[0] as i32) < T[1] as i32) as i32;
+        let m = ((T[0] as i32) < T[1] as i32) as i32;
         SA[(m ^ 1) as usize] = 0;
         SA[m as usize] = 1;
         return 0;
@@ -304,7 +276,7 @@ pub(super) fn divsufsort(T: &[u8], SA: &mut [i32], openMP: bool) -> i32 {
     let mut bucket_A = vec![0i32; BUCKET_A_SIZE as usize];
     let mut bucket_B = vec![0i32; BUCKET_B_SIZE as usize];
 
-    m = sort_typeBstar(T, SA, &mut bucket_A, &mut bucket_B, n as _, openMP);
+    let m = sort_typeBstar(T, SA, &mut bucket_A, &mut bucket_B, n as _, openMP);
     construct_SA(T, SA, &mut bucket_A, &mut bucket_B, n as _, m);
 
     0

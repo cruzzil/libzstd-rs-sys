@@ -10,29 +10,73 @@ const fn const_max(a: usize, b: usize) -> usize {
     }
 }
 
-pub(crate) const ZSTD_OPT_NUM: core::ffi::c_int = 1 << 12;
+pub(crate) const ZSTD_OPT_NUM: usize = 1 << 12;
 
-pub(crate) const ZSTD_REP_NUM: core::ffi::c_int = 3;
-pub(crate) static repStartValue: [u32; ZSTD_REP_NUM as usize] = [1, 4, 8];
+pub(crate) const ZSTD_REP_NUM: u32 = 3;
+pub(crate) type RepCodes = [u32; ZSTD_REP_NUM as usize];
+pub(crate) static repStartValue: RepCodes = [1, 4, 8];
 
 pub(crate) const ZSTD_FRAMEIDSIZE: usize = 4;
 
-const ZSTD_BLOCKHEADERSIZE: core::ffi::c_int = 3;
-pub(crate) static ZSTD_blockHeaderSize: size_t = ZSTD_BLOCKHEADERSIZE as size_t;
-pub(crate) type blockType_e = core::ffi::c_uint;
-pub(crate) const bt_raw: blockType_e = 0;
-pub(crate) const bt_rle: blockType_e = 1;
-pub(crate) const bt_compressed: blockType_e = 2;
+pub(crate) const ZSTD_BLOCKHEADERSIZE: usize = 3;
 
-pub(crate) const MINMATCH: core::ffi::c_int = 3;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum BlockType {
+    #[default]
+    Raw = 0,
+    Rle = 1,
+    Compressed = 2,
+    Reserved = 3,
+}
+
+impl From<u32> for BlockType {
+    fn from(value: u32) -> Self {
+        match value {
+            0 => Self::Raw,
+            1 => Self::Rle,
+            2 => Self::Compressed,
+            3 => Self::Reserved,
+            _ => panic!("invalid `BlockType`: {value}"),
+        }
+    }
+}
+
+#[repr(u32)]
+#[derive(Copy, Clone, PartialEq, Eq, Default)]
+pub enum SymbolEncodingType {
+    #[default]
+    Basic = 0,
+    Rle = 1,
+    Compressed = 2,
+    Repeat = 3,
+}
+
+impl TryFrom<u8> for SymbolEncodingType {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Basic),
+            1 => Ok(Self::Rle),
+            2 => Ok(Self::Compressed),
+            3 => Ok(Self::Repeat),
+            _ => Err(()),
+        }
+    }
+}
+
+pub(crate) const LONGNBSEQ: core::ffi::c_int = 0x7f00;
+
+pub(crate) const MINMATCH: u8 = 3;
 
 pub(crate) const Litbits: u32 = 8;
 pub(crate) const LitHufLog: u32 = 11;
-pub(crate) const MaxLit: u32 = (1 << Litbits) - 1;
-pub(crate) const MaxML: u32 = 52;
-pub(crate) const MaxLL: u32 = 35;
-pub(crate) const DefaultMaxOff: u32 = 28;
-pub(crate) const MaxOff: u32 = 31;
+const _: () = assert!(MaxLit as u32 == (1u32 << Litbits) - 1);
+pub(crate) const MaxLit: u8 = 255;
+pub(crate) const MaxML: u8 = 52;
+pub(crate) const MaxLL: u8 = 35;
+pub(crate) const DefaultMaxOff: u8 = 28;
+pub(crate) const MaxOff: u8 = 31;
 pub(crate) const MaxSeq: usize = const_max(MaxLL as usize, MaxML as usize); /* Assumption : MaxOff < MaxLL,MaxML */
 pub(crate) const MLFSELog: u32 = 9;
 pub(crate) const LLFSELog: u32 = 9;
@@ -43,6 +87,14 @@ pub(crate) const MaxFSELog: usize = const_max(
 );
 pub(crate) const MaxMLBits: u8 = 16;
 pub(crate) const MaxLLBits: u8 = 16;
+
+/// header + <= 127 byte tree description
+pub(crate) const ZSTD_MAX_HUF_HEADER_SIZE: usize = 128;
+/// Each table cannot take more than #symbols * FSELog bits
+pub(crate) const ZSTD_MAX_FSE_HEADERS_SIZE: usize = ((MaxML as u32 + 1) * MLFSELog
+    + (MaxLL as u32 + 1) * LLFSELog
+    + (MaxOff as u32 + 1) * OffFSELog)
+    .div_ceil(8) as usize;
 
 pub(crate) static LL_bits: [u8; MaxLL as usize + 1] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 3, 3, 4, 6, 7, 8, 9, 10, 11,
@@ -76,7 +128,7 @@ pub(crate) unsafe fn ZSTD_copy16(dst: *mut u8, src: *const u8) {
     // be located within the dst buffer. In circumstances where the op "catches up" to where the
     // literal buffer is, there can be partial overlaps in this call on the final
     // copy if the literal is being shifted by less than 16 bytes.
-    crate::cfg_select!(
+    crate::lib::polyfill::cfg_select! {
         target_arch = "x86_64" => {
             #[repr(C)]
             struct V {
@@ -91,7 +143,7 @@ pub(crate) unsafe fn ZSTD_copy16(dst: *mut u8, src: *const u8) {
         _ => {
             core::ptr::copy(src, dst, 16);
         }
-    );
+    };
 }
 
 pub(crate) const WILDCOPY_OVERLENGTH: usize = 32;

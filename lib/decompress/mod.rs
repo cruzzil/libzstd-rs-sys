@@ -3,7 +3,7 @@ use libc::size_t;
 
 use crate::lib::common::xxhash::XXH64_state_t;
 
-use crate::lib::common::zstd_internal::WILDCOPY_OVERLENGTH;
+use crate::lib::common::zstd_internal::{BlockType, RepCodes, WILDCOPY_OVERLENGTH};
 use crate::lib::common::zstd_trace::ZSTD_TraceCtx;
 use crate::lib::decompress::huf_decompress::DTable;
 use crate::lib::decompress::zstd_ddict::{MultipleDDicts, ZSTD_DDict, ZSTD_DDictHashSet};
@@ -14,6 +14,9 @@ pub mod huf_decompress;
 pub mod zstd_ddict;
 pub mod zstd_decompress;
 pub mod zstd_decompress_block;
+
+#[cfg(doc)]
+use crate::{ZSTD_CONTENTSIZE_UNKNOWN, ZSTD_FRAMEHEADERSIZE_MAX};
 
 static LL_base: [u32; 36] = [
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24, 28, 32, 40, 48, 64,
@@ -57,7 +60,7 @@ pub struct ZSTD_entropyDTables_t {
     pub OFTable: SymbolTable<256>,
     pub MLTable: SymbolTable<512>,
     pub hufTable: DTable,
-    pub rep: [u32; 3],
+    pub rep: RepCodes,
     pub workspace: FseWorkspace,
 }
 
@@ -67,8 +70,6 @@ pub struct SymbolTable<const N: usize> {
     header: ZSTD_seqSymbol_header,
     symbols: [ZSTD_seqSymbol; N],
 }
-
-pub type ZSTD_dStage = core::ffi::c_uint;
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,27 +147,6 @@ pub(crate) struct blockProperties_t {
     pub blockType: BlockType,
     pub lastBlock: bool,
     pub origSize: u32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum BlockType {
-    #[default]
-    Raw = 0,
-    Rle = 1,
-    Compressed = 2,
-    Reserved = 3,
-}
-
-impl From<u32> for BlockType {
-    fn from(value: u32) -> Self {
-        match value {
-            0 => Self::Raw,
-            1 => Self::Rle,
-            2 => Self::Compressed,
-            3 => Self::Reserved,
-            _ => panic!("invalid `BlockType`: {value}"),
-        }
-    }
 }
 
 #[derive(Default)]

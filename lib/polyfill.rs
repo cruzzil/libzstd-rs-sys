@@ -1,4 +1,3 @@
-#[macro_export]
 macro_rules! cfg_select {
     ({ $($tt:tt)* }) => {{
         $crate::cfg_select! { $($tt)* }
@@ -11,81 +10,31 @@ macro_rules! cfg_select {
         $($( $rest:tt )+)?
     ) => {
         #[cfg($cfg)]
-        $crate::cfg_select! { _ => $output }
+        $crate::lib::polyfill::cfg_select! { _ => $output }
         $(
             #[cfg(not($cfg))]
-            $crate::cfg_select! { $($rest)+ }
+            $crate::lib::polyfill::cfg_select! { $($rest)+ }
         )?
     }
 }
+pub(crate) use cfg_select;
 
-#[expect(dead_code)]
-pub enum Locality {
-    L3 = 1,
-    L2 = 2,
-    L1 = 3,
+/// Keep the branches on either side of this point in source order.
+///
+/// Once inlined, `a && b` on two cheap, side-effect-free tests becomes two branches, and LLVM
+/// may evaluate `b` first. That matters when `a` is the predictable test and `b` the
+/// unpredictable one: e.g. in the match finders, the data comparison almost never succeeds,
+/// while the match-index validity check is close to random.
+macro_rules! branch_barrier {
+    () => {
+        #[cfg(not(any(target_family = "wasm", miri)))]
+        // SAFETY: an empty asm block has no effect.
+        unsafe {
+            core::arch::asm!("", options(preserves_flags));
+        }
+    };
 }
-
-pub fn prefetch_read_data<T>(data: *const T, locality: Locality) {
-    // The match ensures that the locality argument is a constant value, as required.
-
-    // SAFETY: the prefetch intrinsics do not modify the behavior of the program. They cannot trap
-    // and do not produce a value. Hence it is safe to provide an arbitrary pointer.
-    unsafe {
-        match locality {
-            Locality::L3 => prefetch_read_data_internal::<_, 1>(data),
-            Locality::L2 => prefetch_read_data_internal::<_, 2>(data),
-            Locality::L1 => prefetch_read_data_internal::<_, 3>(data),
-        }
-    }
-}
-
-unsafe fn prefetch_read_data_internal<T, const LOCALITY: i32>(ptr: *const T) {
-    cfg_select! {
-        feature = "no-prefetch" => {
-            let _ = ptr;
-        }
-        feature = "nightly" => {
-            use core::hint::Locality;
-
-            core::hint::prefetch_read(ptr, const {
-                match LOCALITY {
-                    1 => Locality::L3,
-                    2 => Locality::L2,
-                    3 => Locality::L1,
-                    _ => panic!(),
-                }
-            })
-        }
-        target_arch = "x86_64" => {
-            use core::arch::x86_64;
-            x86_64::_mm_prefetch(ptr as *const i8, LOCALITY)
-        }
-        target_arch = "x86" => {
-            use core::arch::x86;
-            unsafe { x86::_mm_prefetch(ptr as *const i8, LOCALITY) };
-        }
-        target_arch = "aarch64" => {
-            core::arch::asm!(
-                "prfm {op}, [{addr}]",
-                op = const {
-                    match LOCALITY {
-                        0 => 0b00000, // pldl1strm
-                        1 => 0b00001, // pldl1keep
-                        2 => 0b00010, // pldl2keep
-                        3 => 0b00011, // pldl3keep
-                        _ => panic!(),
-                    }
-                },
-                addr = in(reg) ptr,
-                options(nostack, preserves_flags)
-            );
-        }
-        _ => {
-            let _ = ptr;
-        }
-    }
-}
+pub(crate) use branch_barrier;
 
 pub trait PointerExt {
     fn wrapping_offset_from(self, other: Self) -> isize;
@@ -106,7 +55,7 @@ impl<T> PointerExt for *mut T {
 
 cfg_select! {
     feature = "nightly" => {
-        pub use core::hint::{likely, unlikely, cold_path};
+        pub use core::hint::{cold_path, likely, unlikely};
     }
     _ => {
         #[inline(always)]

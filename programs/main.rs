@@ -4,7 +4,9 @@
 #![allow(non_upper_case_globals)]
 #![allow(unused_assignments)]
 // FIXME I guess
-#![allow(clippy::all)]
+#![allow(clippy::missing_safety_doc)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::nonminimal_bool)]
 extern crate libc;
 
 pub mod benchfn;

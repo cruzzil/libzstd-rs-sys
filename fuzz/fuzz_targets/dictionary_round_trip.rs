@@ -1,6 +1,6 @@
 #![no_main]
+#![allow(deprecated)]
 
-use c2rust_out_fuzz::ArbitrarySamples;
 use libfuzzer_sys::{arbitrary, fuzz_target};
 use libzstd_rs_sys::{
     internal::ZSTD_XXH64,
@@ -14,6 +14,7 @@ use libzstd_rs_sys::{
         zstd::ZSTD_dct_auto,
     },
 };
+use libzstd_rs_sys_fuzz::ArbitrarySamples;
 
 macro_rules! zassert {
     ($expr:expr, $msg:literal) => {{
@@ -282,7 +283,7 @@ fuzz_target!(|data: (ArbitraryRoundTrip, ArbitrarySamples)| {
         ),
         "Decompression failed"
     );
-    assert!(res == src.len(), "Incorrect regenerated size");
+    assert_eq!(res, src.len(), "Incorrect regenerated size");
     assert_eq!(result, src, "Corruption!");
 
     unsafe {

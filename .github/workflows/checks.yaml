@@ -76,21 +76,28 @@ jobs:
           - target: "aarch64-pc-windows-msvc"
             rust: stable
             os: windows-11-arm
+
+          - target: "x86_64-unknown-linux-gnu"
+            rust: msrv
+            os: ubuntu-latest
     steps:
       - name: Checkout sources
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           persist-credentials: false
+      - name: Set target rust version
+        if: ${{ matrix.rust == 'msrv' }}
+        run: echo "MSRV=$(grep rust-version Cargo.toml | grep MSRV | awk -F '\"' '{print $2}')" >> $GITHUB_ENV
       - name: Install toolchain
         uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
         with:
-          toolchain: stable
+          toolchain: ${{ env.MSRV || matrix.rust || 'stable' }}
           targets: "${{ matrix.target }}"
       - name: target
         run: "rustc -vV | sed -n 's|host: ||p'"
         if: matrix.os != 'windows-2022'
       - name: Install cargo-llvm-cov & cargo-nextest
-        uses: taiki-e/install-action@cfdb446e391c69574ebc316dfb7d7849ec12b940 # v2.68.8
+        uses: taiki-e/install-action@d6e286fa45544157a02d45a43742857ebbc25d12 # v2.68.16
         with:
           tool: cargo-llvm-cov,cargo-nextest
       - name: Cache apt packages
@@ -155,6 +162,26 @@ jobs:
       - name: Run clippy
         run: cargo clippy --target ${{matrix.target}} ${{matrix.features}} --workspace --all-targets -- -D warnings
 
+  fuzz-compress:
+    name: fuzz-compress
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: nightly
+      - name: Install cargo fuzz
+        run: cargo install cargo-fuzz
+      - name: run the fuzzer
+        run: |
+          cargo fuzz run compress -- -max_total_time=90
+        env:
+          RUSTFLAGS: "-Awarnings"
+
   fuzz-decompress:
     name: fuzz-decompress
     runs-on: ubuntu-latest
@@ -176,7 +203,7 @@ jobs:
       - name: run the fuzzer
         run: |
           cargo fuzz run decompress zstd-files/compressed -- -max_total_time=10
-          cargo fuzz run decompress_overlapping zstd-files/compressed -- -max_total_time=10
+          cargo fuzz run decompress-overlapping zstd-files/compressed -- -max_total_time=10
         env:
           RUSTFLAGS: "-Awarnings"
 
@@ -196,10 +223,10 @@ jobs:
         run: cargo install cargo-fuzz
       - name: run the fuzzer
         run: |
-          cargo fuzz run dictionary_round_trip -- -max_total_time=10
-          cargo fuzz run dictionary_train -- -dict=./fuzz/dictionaries/dictionary_train.txt -max_total_time=60
-          cargo fuzz run dictionary_train_fast -- -dict=./fuzz/dictionaries/dictionary_train.txt -max_total_time=60
-          cargo fuzz run dictionary_train_legacy -- -dict=./fuzz/dictionaries/dictionary_train.txt -max_total_time=60
+          cargo fuzz run dictionary-round-trip -- -max_total_time=10
+          cargo fuzz run dictionary-train -- -dict=./fuzz/dictionaries/dictionary_train.txt -max_total_time=60
+          cargo fuzz run dictionary-train-fast -- -dict=./fuzz/dictionaries/dictionary_train.txt -max_total_time=60
+          cargo fuzz run dictionary-train-legacy -- -dict=./fuzz/dictionaries/dictionary_train.txt -max_total_time=60
         env:
           RUSTFLAGS: "-Awarnings"
   fuzz-huf:
@@ -218,7 +245,7 @@ jobs:
         run: cargo install cargo-fuzz
       - name: run the fuzzer
         run: |
-          cargo fuzz run huf_round_trip -- -max_total_time=10
+          cargo fuzz run huf-round-trip -- -max_total_time=10
         env:
           RUSTFLAGS: "-Awarnings"
 
@@ -236,7 +263,7 @@ jobs:
           rustup toolchain install nightly --component miri
           cargo +nightly miri setup
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@cfdb446e391c69574ebc316dfb7d7849ec12b940 # v2.68.8
+        uses: taiki-e/install-action@d6e286fa45544157a02d45a43742857ebbc25d12 # v2.68.16
         with:
           tool: cargo-nextest
       - name: Run unit tests with miri
@@ -303,3 +330,33 @@ jobs:
 
       - name: run test
         run: ./zstreamtest -T60s
+
+  link-c-static-library:
+    name: vanilla static library
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+        features:
+          - ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+        with:
+          persist-credentials: false
+      - name: Install rust toolchain
+        uses: dtolnay/rust-toolchain@be73d7920c329f220ce78e0234b8f96b7ae60248
+        with:
+          toolchain: stable
+          targets: ${{matrix.target}}
+      - name: "cdylib: custom-prefix"
+        env:
+          LIBZSTD_RS_SYS_PREFIX: "MY_CUSTOM_PREFIX_"
+        run: |
+          cargo build --release --target ${{matrix.target}} --features=custom-prefix
+          objdump -tT target/${{matrix.target}}/release/liblibzstd_rs_sys.a | grep -q "MY_CUSTOM_PREFIX_ZSTD_getErrorCode" || (echo "symbol not found!" && exit 1)
+      - name: "cdylib: semver-prefix"
+        run: |
+          cargo build --release --target ${{matrix.target}} --features=semver-prefix
+          objdump -t target/${{matrix.target}}/release/liblibzstd_rs_sys.a | grep -q -E "LIBZSTD_RS_SYS_v0.[0-9]+.x_ZSTD_getErrorCode" || (echo "symbol not found!" && exit 1)

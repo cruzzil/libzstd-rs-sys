@@ -1,39 +1,38 @@
 use core::ptr;
 
-use core::ffi::{c_char, c_int, c_uint, c_ulong, c_void};
+use core::ffi::{c_char, c_int, c_uint, c_void};
 use libc::size_t;
 
-use crate::lib::common::mem::MEM_read16;
 use crate::lib::compress::hist::HIST_add;
 
-const ZSTD_SLIPBLOCK_WORKSPACESIZE: usize = 8208;
+pub const ZSTD_SLIPBLOCK_WORKSPACESIZE: usize = 8208;
 
 pub const BLOCKSIZE_MIN: c_int = 3500;
 pub const THRESHOLD_PENALTY_RATE: c_int = 16;
 pub const THRESHOLD_BASE: c_int = THRESHOLD_PENALTY_RATE - 2;
 pub const THRESHOLD_PENALTY: c_int = 3;
 
-pub const HASHLENGTH: c_int = 2;
+pub const HASHLENGTH: usize = 2;
 pub const HASHLOG_MAX: c_uint = 10;
-pub const HASHTABLESIZE: c_int = (1) << HASHLOG_MAX;
+pub const HASHTABLESIZE: usize = 1 << HASHLOG_MAX;
 pub const KNUTH: c_uint = 0x9e3779b9;
 
 /// for `hashLog` > 8, hash 2 bytes.
 /// for `hashLog` == 8, just take the byte, no hashing.
 /// The speed of this method relies on compile-time constant propagation
 #[inline(always)]
-unsafe fn hash2(p: *const c_void, hashLog: c_uint) -> c_uint {
+fn hash2(p: [u8; HASHLENGTH], hashLog: c_uint) -> c_uint {
     debug_assert!(hashLog >= 8);
     if hashLog == 8 {
-        return *(p as *const u8) as u32;
+        return u32::from(p[0]);
     }
     debug_assert!(hashLog <= HASHLOG_MAX);
-    (MEM_read16(p) as u32).wrapping_mul(KNUTH) >> (32 as c_uint).wrapping_sub(hashLog)
+    u32::from(u16::from_ne_bytes(p)).wrapping_mul(KNUTH) >> 32u32.wrapping_sub(hashLog)
 }
 
 #[repr(C)]
 pub struct Fingerprint {
-    pub events: [c_uint; 1024],
+    pub events: [c_uint; HASHTABLESIZE],
     pub nbEvents: size_t,
 }
 
@@ -48,50 +47,41 @@ unsafe fn initStats(fpstats: *mut FPStats) {
 }
 
 #[inline(always)]
-unsafe fn addEvents_generic(
-    fp: &mut Fingerprint,
-    src: *const c_void,
-    srcSize: size_t,
-    samplingRate: size_t,
-    hashLog: c_uint,
-) {
-    let p = src as *const c_char;
-    let limit = srcSize.wrapping_sub(HASHLENGTH as size_t).wrapping_add(1);
-    let mut n: size_t = 0;
+fn addEvents_generic(fp: &mut Fingerprint, src: &[u8], samplingRate: size_t, hashLog: c_uint) {
+    let limit = src.len().wrapping_sub(HASHLENGTH).wrapping_add(1);
 
-    debug_assert!(srcSize >= HASHLENGTH as usize);
-    while n < limit {
-        fp.events[hash2(p.add(n) as *const c_void, hashLog) as usize] += 1;
-        n = n.wrapping_add(samplingRate);
+    debug_assert!(src.len() >= HASHLENGTH);
+    for i in 0..limit.div_ceil(samplingRate) {
+        let n = i * samplingRate;
+        fp.events[hash2(*src[n..].first_chunk().unwrap(), hashLog) as usize] += 1;
     }
 
     fp.nbEvents += limit / samplingRate;
 }
 
 #[inline(always)]
-unsafe fn recordFingerprint_generic<const SAMPLING_RATE: size_t, const HASH_LOG: c_uint>(
+fn recordFingerprint_generic<const SAMPLING_RATE: size_t, const HASH_LOG: c_uint>(
     fp: &mut Fingerprint,
-    src: *const c_void,
-    srcSize: size_t,
+    src: &[u8],
 ) {
-    ptr::write_bytes(fp as *mut _ as *mut u8, 0, size_of::<c_uint>() << HASH_LOG);
+    fp.events[..1usize << HASH_LOG].fill(0);
     fp.nbEvents = 0;
-    addEvents_generic(fp, src, srcSize, SAMPLING_RATE, HASH_LOG);
+    addEvents_generic(fp, src, SAMPLING_RATE, HASH_LOG);
 }
 
 fn abs64(s64: i64) -> u64 {
     s64.unsigned_abs()
 }
 
-unsafe fn fpDistance(fp1: &Fingerprint, fp2: *const Fingerprint, hashLog: c_uint) -> u64 {
+fn fpDistance(fp1: &Fingerprint, fp2: &Fingerprint, hashLog: c_uint) -> u64 {
     let mut distance = 0u64;
 
     debug_assert!(hashLog <= HASHLOG_MAX);
 
-    for n in 0..((1) << hashLog) {
+    for n in 0..(1 << hashLog) {
         distance = distance.wrapping_add(abs64(
-            fp1.events[n as usize] as i64 * (*fp2).nbEvents as i64
-                - ((*fp2).events)[n as usize] as i64 * fp1.nbEvents as i64,
+            fp1.events[n as usize] as i64 * fp2.nbEvents as i64
+                - fp2.events[n as usize] as i64 * fp1.nbEvents as i64,
         ));
     }
     distance
@@ -99,30 +89,30 @@ unsafe fn fpDistance(fp1: &Fingerprint, fp2: *const Fingerprint, hashLog: c_uint
 
 /// Compares new events with past events.
 ///
-/// Returns `1` when the fingerprints are considered "too different", `0` otherwise.
-unsafe fn compareFingerprints(
+/// Returns `true` when the fingerprints are considered "too different".
+fn compareFingerprints(
     ref_0: &Fingerprint,
     newfp: &Fingerprint,
     penalty: c_int,
     hashLog: c_uint,
-) -> c_int {
+) -> bool {
     debug_assert!(ref_0.nbEvents > 0);
     debug_assert!(newfp.nbEvents > 0);
 
     let p50 = ref_0.nbEvents * newfp.nbEvents;
     let deviation = fpDistance(ref_0, newfp, hashLog);
     let threshold = p50 as u64 * (THRESHOLD_BASE + penalty) as u64 / THRESHOLD_PENALTY_RATE as u64;
-    (deviation >= threshold) as c_int
+    deviation >= threshold
 }
 
 fn mergeEvents(acc: &mut Fingerprint, newfp: &Fingerprint) {
-    for n in 0..HASHTABLESIZE as usize {
+    for n in 0..HASHTABLESIZE {
         acc.events[n] += newfp.events[n];
     }
     acc.nbEvents += newfp.nbEvents;
 }
 
-pub const CHUNKSIZE: c_int = (8) << 10;
+pub const CHUNKSIZE: c_int = 8 << 10;
 
 unsafe fn ZSTD_splitBlock_byChunks(
     blockStart: *const c_void,
@@ -131,20 +121,20 @@ unsafe fn ZSTD_splitBlock_byChunks(
     workspace: *mut c_void,
     wkspSize: size_t,
 ) -> size_t {
-    static records_fs: [unsafe fn(&mut Fingerprint, *const c_void, size_t) -> (); 4] = [
-        recordFingerprint_generic::<1, 10>,
-        recordFingerprint_generic::<5, 10>,
-        recordFingerprint_generic::<11, 9>,
+    // NOTE: the sampling rates go from coarse to fine, so that the hash log of each
+    // entry matches the corresponding entry of `hashParams` below.
+    static records_fs: [fn(&mut Fingerprint, &[u8]) -> (); 4] = [
         recordFingerprint_generic::<43, 8>,
+        recordFingerprint_generic::<11, 9>,
+        recordFingerprint_generic::<5, 10>,
+        recordFingerprint_generic::<1, 10>,
     ];
 
     static hashParams: [c_uint; 4] = [8, 9, 10, 10];
     debug_assert!((0..=3).contains(&level));
-    let record_f = *records_fs.as_ptr().offset(level as isize);
+    let record_f = records_fs[level as usize];
     let fpstats = workspace as *mut FPStats;
-    let p = blockStart as *const c_char;
     let mut penalty = THRESHOLD_PENALTY;
-    let mut pos = 0;
 
     debug_assert_eq!(blockSize, (128 << 10));
     debug_assert!(!workspace.is_null());
@@ -152,26 +142,20 @@ unsafe fn ZSTD_splitBlock_byChunks(
     const { debug_assert!(ZSTD_SLIPBLOCK_WORKSPACESIZE >= size_of::<FPStats>()) }
     debug_assert!(wkspSize >= size_of::<FPStats>());
 
+    let block = core::slice::from_raw_parts(blockStart.cast::<u8>(), blockSize);
+    let chunk = CHUNKSIZE as usize;
+
     initStats(fpstats);
-    record_f(
-        &mut (*fpstats).pastEvents,
-        p as *const c_void,
-        CHUNKSIZE as size_t,
-    );
-    pos = CHUNKSIZE as size_t;
+    record_f(&mut (*fpstats).pastEvents, &block[..chunk]);
+    let mut pos = CHUNKSIZE as size_t;
     while pos <= blockSize.wrapping_sub(CHUNKSIZE as size_t) {
-        record_f(
-            &mut (*fpstats).newEvents,
-            p.add(pos) as *const c_void,
-            CHUNKSIZE as size_t,
-        );
+        record_f(&mut (*fpstats).newEvents, &block[pos..][..chunk]);
         if compareFingerprints(
             &(*fpstats).pastEvents,
             &(*fpstats).newEvents,
             penalty,
-            *hashParams.as_ptr().offset(level as isize),
-        ) != 0
-        {
+            hashParams[level as usize],
+        ) {
             return pos;
         } else {
             mergeEvents(&mut (*fpstats).pastEvents, &(*fpstats).newEvents);
@@ -181,7 +165,7 @@ unsafe fn ZSTD_splitBlock_byChunks(
         }
         pos = pos.wrapping_add(CHUNKSIZE as size_t);
     }
-    debug_assert!(pos == blockSize);
+    debug_assert_eq!(pos, blockSize);
     blockSize
 }
 
@@ -205,9 +189,8 @@ unsafe fn ZSTD_splitBlock_fromBorders(
     const SEGMENT_SIZE: c_int = 512;
 
     let fpstats = workspace as *mut FPStats;
-    let middleEvents = (workspace as *mut c_char)
-        .offset((512 as c_ulong).wrapping_mul(size_of::<c_uint>() as c_ulong) as isize)
-        as *mut c_void as *mut Fingerprint;
+    let middleEvents = (workspace as *mut c_char).add(512 * size_of::<c_uint>()) as *mut c_void
+        as *mut Fingerprint;
 
     debug_assert_eq!(blockSize, (128 << 10));
     debug_assert!(!workspace.is_null());
@@ -215,42 +198,33 @@ unsafe fn ZSTD_splitBlock_fromBorders(
     const { assert!(ZSTD_SLIPBLOCK_WORKSPACESIZE >= size_of::<FPStats>()) }
     debug_assert!(wkspSize >= size_of::<FPStats>());
 
+    let block = core::slice::from_raw_parts(blockStart.cast::<u8>(), blockSize);
+    let segment = SEGMENT_SIZE as usize;
+
     initStats(fpstats);
+    HIST_add(&mut (*fpstats).pastEvents.events, &block[..segment]);
     HIST_add(
-        ((*fpstats).pastEvents.events).as_mut_ptr(),
-        blockStart,
-        SEGMENT_SIZE as size_t,
-    );
-    HIST_add(
-        ((*fpstats).newEvents.events).as_mut_ptr(),
-        (blockStart as *const c_char)
-            .add(blockSize)
-            .offset(-(SEGMENT_SIZE as isize)) as *const c_void,
-        SEGMENT_SIZE as size_t,
+        &mut (*fpstats).newEvents.events,
+        &block[blockSize - segment..],
     );
     (*fpstats).newEvents.nbEvents = SEGMENT_SIZE as size_t;
     (*fpstats).pastEvents.nbEvents = (*fpstats).newEvents.nbEvents;
-    if compareFingerprints(&(*fpstats).pastEvents, &(*fpstats).newEvents, 0, 8) == 0 {
+    if !compareFingerprints(&(*fpstats).pastEvents, &(*fpstats).newEvents, 0, 8) {
         return blockSize;
     }
-    HIST_add(
-        ((*middleEvents).events).as_mut_ptr(),
-        (blockStart as *const c_char)
-            .add(blockSize / 2)
-            .offset(-((SEGMENT_SIZE / 2) as isize)) as *const c_void,
-        SEGMENT_SIZE as size_t,
-    );
+    let middle = blockSize / 2 - segment / 2;
+    HIST_add(&mut (*middleEvents).events, &block[middle..][..segment]);
     (*middleEvents).nbEvents = SEGMENT_SIZE as size_t;
-    let distFromBegin = fpDistance(&(*fpstats).pastEvents, middleEvents, 8);
-    let distFromEnd = fpDistance(&(*fpstats).newEvents, middleEvents, 8);
+    let distFromBegin = fpDistance(&(*fpstats).pastEvents, &*middleEvents, 8);
+    let distFromEnd = fpDistance(&(*fpstats).newEvents, &*middleEvents, 8);
     let minDistance = (SEGMENT_SIZE * SEGMENT_SIZE / 3) as u64;
     if abs64(distFromBegin as i64 - distFromEnd as i64) < minDistance {
-        return (64 * ((1) << 10)) as size_t;
+        return 64 * (1 << 10);
     }
     (if distFromBegin > distFromEnd {
-        32 * ((1) << 10)
+        32 * (1 << 10)
     } else {
-        96 * ((1) << 10)
+        96 * (1 << 10)
     }) as size_t
 }
 

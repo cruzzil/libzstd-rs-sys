@@ -13,7 +13,7 @@ use crate::lib::polyfill::likely;
 #[inline(always)]
 fn FSE_readNCount_body(
     normalizedCounter: &mut [i16],
-    maxSVPtr: &mut core::ffi::c_uint,
+    maxSVPtr: &mut u8,
     tableLogPtr: &mut core::ffi::c_uint,
     headerBuffer: &[u8],
 ) -> Result<size_t, Error> {
@@ -21,19 +21,14 @@ fn FSE_readNCount_body(
 
     let iend = hbSize;
     let mut ip = 0usize;
-    let mut nbBits: core::ffi::c_int = 0;
-    let mut remaining: core::ffi::c_int = 0;
-    let mut threshold: core::ffi::c_int = 0;
-    let mut bitStream: u32 = 0;
-    let mut bitCount: core::ffi::c_int = 0;
     let mut charnum = 0 as core::ffi::c_uint;
-    let maxSV1 = (*maxSVPtr).wrapping_add(1);
+    let maxSV1 = u32::from(*maxSVPtr) + 1;
     let mut previous_was_0 = false;
     if hbSize < 8 {
         let mut buffer = [0u8; 8];
         buffer[..hbSize].copy_from_slice(headerBuffer);
 
-        let countSize = FSE_readNCount_slice(normalizedCounter, maxSVPtr, tableLogPtr, &buffer)?;
+        let countSize = FSE_readNCount(normalizedCounter, maxSVPtr, tableLogPtr, &buffer)?;
 
         if countSize > hbSize {
             return Err(Error::corruption_detected);
@@ -45,17 +40,17 @@ fn FSE_readNCount_body(
 
     let read_u32_le = |offset| u32::from_le_bytes(headerBuffer[offset..][..4].try_into().unwrap());
 
-    bitStream = read_u32_le(ip);
-    nbBits = (bitStream & 0xf as core::ffi::c_int as u32).wrapping_add(FSE_MIN_TABLELOG as u32)
-        as core::ffi::c_int;
+    let mut bitStream = read_u32_le(ip);
+    let mut nbBits = (bitStream & 0xf as core::ffi::c_int as u32)
+        .wrapping_add(FSE_MIN_TABLELOG as u32) as core::ffi::c_int;
     if nbBits > FSE_TABLELOG_ABSOLUTE_MAX {
         return Err(Error::tableLog_tooLarge);
     }
     bitStream >>= 4;
-    bitCount = 4;
+    let mut bitCount: core::ffi::c_int = 4;
     *tableLogPtr = nbBits as core::ffi::c_uint;
-    remaining = (1 << nbBits) + 1;
-    threshold = 1 << nbBits;
+    let mut remaining = (1 << nbBits) + 1;
+    let mut threshold = 1 << nbBits;
     nbBits += 1;
     loop {
         if previous_was_0 {
@@ -109,7 +104,7 @@ fn FSE_readNCount_body(
         }
 
         let max = 2 * threshold - 1 - remaining;
-        let mut count: core::ffi::c_int = 0;
+        let mut count;
         if (bitStream & (threshold - 1) as u32) < max as u32 {
             count = (bitStream & (threshold - 1) as u32) as core::ffi::c_int;
             bitCount += nbBits - 1;
@@ -136,7 +131,7 @@ fn FSE_readNCount_body(
                 break;
             }
             nbBits = remaining.ilog2() as i32 + 1;
-            threshold = (1) << (nbBits - 1);
+            threshold = 1 << (nbBits - 1);
         }
         if charnum >= maxSV1 {
             break;
@@ -162,7 +157,11 @@ fn FSE_readNCount_body(
         return Err(Error::corruption_detected);
     }
 
-    *maxSVPtr = charnum.wrapping_sub(1);
+    match u8::try_from(charnum - 1) {
+        Ok(v) => *maxSVPtr = v,
+        Err(_) => return Err(Error::maxSymbolValue_tooSmall),
+    }
+
     ip += ((bitCount + 7) >> 3) as usize;
 
     Ok(ip)
@@ -170,15 +169,16 @@ fn FSE_readNCount_body(
 
 fn FSE_readNCount_body_default(
     normalizedCounter: &mut [i16],
-    maxSVPtr: &mut core::ffi::c_uint,
+    maxSVPtr: &mut u8,
     tableLogPtr: &mut core::ffi::c_uint,
     headerBuffer: &[u8],
 ) -> Result<size_t, Error> {
     FSE_readNCount_body(normalizedCounter, maxSVPtr, tableLogPtr, headerBuffer)
 }
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "bmi2"))]
 fn FSE_readNCount_body_bmi2(
     normalizedCounter: &mut [i16],
-    maxSVPtr: &mut core::ffi::c_uint,
+    maxSVPtr: &mut u8,
     tableLogPtr: &mut core::ffi::c_uint,
     headerBuffer: &[u8],
 ) -> Result<size_t, Error> {
@@ -187,41 +187,22 @@ fn FSE_readNCount_body_bmi2(
 
 pub(super) fn FSE_readNCount_bmi2(
     normalizedCounter: &mut [i16],
-    maxSVPtr: &mut core::ffi::c_uint,
+    maxSVPtr: &mut u8,
     tableLogPtr: &mut core::ffi::c_uint,
     headerBuffer: &[u8],
     bmi2: core::ffi::c_int,
 ) -> Result<size_t, Error> {
     if bmi2 != 0 {
-        FSE_readNCount_body_bmi2(normalizedCounter, maxSVPtr, tableLogPtr, headerBuffer)
+        // SAFETY: the bmi2 feature is enabled.
+        unsafe { FSE_readNCount_body_bmi2(normalizedCounter, maxSVPtr, tableLogPtr, headerBuffer) }
     } else {
         FSE_readNCount_body_default(normalizedCounter, maxSVPtr, tableLogPtr, headerBuffer)
     }
 }
 
-pub(crate) unsafe fn FSE_readNCount(
+pub(crate) fn FSE_readNCount(
     normalizedCounter: &mut [i16],
-    maxSVPtr: &mut core::ffi::c_uint,
-    tableLogPtr: &mut core::ffi::c_uint,
-    headerBuffer: *const core::ffi::c_void,
-    hbSize: size_t,
-) -> size_t {
-    let ret = FSE_readNCount_slice(
-        normalizedCounter,
-        maxSVPtr,
-        tableLogPtr,
-        core::slice::from_raw_parts(headerBuffer.cast(), hbSize),
-    );
-
-    match ret {
-        Ok(v) => v,
-        Err(e) => e.to_error_code(),
-    }
-}
-
-pub(crate) fn FSE_readNCount_slice(
-    normalizedCounter: &mut [i16],
-    maxSVPtr: &mut core::ffi::c_uint,
+    maxSVPtr: &mut u8,
     tableLogPtr: &mut core::ffi::c_uint,
     headerBuffer: &[u8],
 ) -> Result<size_t, Error> {
@@ -235,7 +216,7 @@ pub(crate) fn HUF_readStats(
     nbSymbolsPtr: &mut u32,
     tableLogPtr: &mut u32,
     src: &[u8],
-) -> size_t {
+) -> Result<size_t, Error> {
     // We can remove this at some point, it's just a check that the constants are correct.
     const _: () = assert!(HUF_READ_STATS_WORKSPACE_SIZE_U32 == 219);
 
@@ -266,14 +247,12 @@ fn HUF_readStats_body(
     bmi2: bool,
 ) -> Result<size_t, Error> {
     let srcSize = ip.len();
-
-    let mut weightTotal: u32 = 0;
-    let mut iSize: size_t = 0;
-    let mut oSize: size_t = 0;
     if srcSize == 0 {
         return Err(Error::srcSize_wrong);
     }
-    iSize = ip[0] as usize;
+
+    let mut iSize = usize::from(ip[0]);
+    let oSize: usize;
     if iSize >= 128 {
         // Special header case.
         oSize = iSize.wrapping_sub(127);
@@ -285,7 +264,7 @@ fn HUF_readStats_body(
             return Err(Error::corruption_detected);
         }
         ip = &ip[1..];
-        for n in (0..oSize as usize).step_by(2) {
+        for n in (0..oSize).step_by(2) {
             huffWeight[n] = ip[n / 2] >> 4;
             huffWeight[n + 1] = ip[n / 2] & 0b1111;
         }
@@ -298,7 +277,7 @@ fn HUF_readStats_body(
         oSize = FSE_decompress_wksp_bmi2(
             // At most (hwSize-1) values decoded, the last one is implied.
             &mut huffWeight[..hwSize - 1],
-            &ip[1..][..iSize as usize],
+            &ip[1..][..iSize],
             6,
             // TODO this should probably be a (4-byte aligned) byte slice from the start.
             workspace,
@@ -308,8 +287,8 @@ fn HUF_readStats_body(
 
     // Collect weight stats.
     rankStats[..HUF_TABLELOG_MAX + 1].fill(0);
-    weightTotal = 0;
-    for weight in huffWeight[..oSize as usize].iter() {
+    let mut weightTotal = 0;
+    for weight in huffWeight[..oSize].iter() {
         let Some(rank_stat) = rankStats.get_mut(usize::from(*weight)) else {
             return Err(Error::corruption_detected);
         };
@@ -335,7 +314,7 @@ fn HUF_readStats_body(
     if verif != rest {
         return Err(Error::corruption_detected);
     }
-    huffWeight[oSize as usize] = lastWeight as u8;
+    huffWeight[oSize] = lastWeight as u8;
     rankStats[lastWeight as usize] += 1;
 
     // Check tree construction validity.
@@ -378,7 +357,7 @@ impl DTable {
 
     pub(super) fn destructure_mut(
         &mut self,
-        max_symbol_value: u32,
+        max_symbol_value: u8,
         tableLog: u32,
     ) -> (
         &mut FSE_DTableHeader,
@@ -391,7 +370,7 @@ impl DTable {
             core::slice::from_raw_parts_mut(rest.as_mut_ptr().cast::<u16>(), rest.len() * 2)
         };
 
-        let (symbols, rest) = rest.split_at_mut(max_symbol_value as usize + 1);
+        let (symbols, rest) = rest.split_at_mut(usize::from(max_symbol_value) + 1);
         let spread = unsafe {
             core::slice::from_raw_parts_mut(rest.as_mut_ptr().cast::<u8>(), rest.len() * 2)
         };
@@ -472,10 +451,10 @@ pub(crate) fn HUF_readStats_wksp(
     src: &[u8],
     workspace: &mut Workspace,
     flags: core::ffi::c_int,
-) -> size_t {
+) -> Result<size_t, Error> {
     let use_bmi2 = flags & HUF_flags_bmi2 as core::ffi::c_int != 0;
 
-    let ret = HUF_readStats_body(
+    HUF_readStats_body(
         huffWeight,
         hwSize,
         rankStats,
@@ -484,12 +463,7 @@ pub(crate) fn HUF_readStats_wksp(
         src,
         workspace,
         use_bmi2,
-    );
-
-    match ret {
-        Ok(v) => v,
-        Err(e) => e.to_error_code(),
-    }
+    )
 }
 
 #[cfg(test)]
@@ -586,7 +560,7 @@ mod tests {
                         src.as_ptr().cast::<core::ffi::c_void>(),
                         src.len(),
                         &mut workspace,
-                        core::mem::size_of::<Workspace>(),
+                        size_of::<Workspace>(),
                         if bmi2 { HUF_flags_bmi2 as core::ffi::c_int } else { 0 },
                     );
 

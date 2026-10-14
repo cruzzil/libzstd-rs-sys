@@ -9,7 +9,7 @@ use libc::{
     calloc, chmod, chown, closedir, dirent, exit, fchmod, fchown, fclose, feof, ferror, fgets,
     fileno, fopen, fprintf, fread, free, getchar, isatty, malloc, memcpy, mkdir, mode_t, opendir,
     readdir, realloc, size_t, strchr, strcmp, strdup, strlen, strncmp, strrchr, strstr, strtol,
-    sysconf, timespec, DIR, FILE, _SC_NPROCESSORS_ONLN,
+    sysconf, timespec, _SC_NPROCESSORS_ONLN, DIR, FILE,
 };
 
 extern "C" {
@@ -97,7 +97,7 @@ pub const PATH_SEP: core::ffi::c_int = '/' as i32;
 pub const UTIL_FILESIZE_UNKNOWN: core::ffi::c_int = -(1);
 pub const AT_FDCWD: core::ffi::c_int = -(100);
 pub const __S_IFMT: core::ffi::c_int = 0o170000 as core::ffi::c_int;
-pub const UTIME_NOW: core::ffi::c_long = ((1) << 30) - 1;
+pub const UTIME_NOW: core::ffi::c_long = (1 << 30) - 1;
 pub const ENOMEM: core::ffi::c_int = 12;
 pub const EEXIST: core::ffi::c_int = 17;
 static mut g_traceDepth: core::ffi::c_int = 0;
@@ -120,25 +120,14 @@ pub unsafe fn UTIL_requireUserConfirmation(
     let mut ch: core::ffi::c_int = 0;
     let mut result: core::ffi::c_int = 0;
     if hasStdinInput != 0 {
-        fprintf(
-            stderr,
-            b"stdin is an input - not proceeding.\n\0" as *const u8 as *const core::ffi::c_char,
-        );
+        fprintf(stderr, c"stdin is an input - not proceeding.\n".as_ptr());
         return 1;
     }
-    fprintf(
-        stderr,
-        b"%s\0" as *const u8 as *const core::ffi::c_char,
-        prompt,
-    );
+    fprintf(stderr, c"%s".as_ptr(), prompt);
     ch = getchar();
     result = 0;
     if (strchr(acceptableLetters, ch)).is_null() {
-        fprintf(
-            stderr,
-            b"%s \n\0" as *const u8 as *const core::ffi::c_char,
-            abortMsg,
-        );
+        fprintf(stderr, c"%s \n".as_ptr(), abortMsg);
         result = 1;
     }
     while ch != EOF && ch != '\n' as i32 {
@@ -146,8 +135,8 @@ pub unsafe fn UTIL_requireUserConfirmation(
     }
     result
 }
-pub const LIST_SIZE_INCREASE: size_t = 8 as size_t * ((1) << 10) as size_t;
-pub const MAX_FILE_OF_FILE_NAMES_SIZE: core::ffi::c_int = ((1) << 20) * 50;
+pub const LIST_SIZE_INCREASE: size_t = 8 as size_t * (1 << 10) as size_t;
+pub const MAX_FILE_OF_FILE_NAMES_SIZE: core::ffi::c_int = (1 << 20) * 50;
 pub unsafe fn UTIL_traceFileStat() {
     g_traceFileStat = 1;
 }
@@ -160,17 +149,12 @@ pub unsafe fn UTIL_fstat(
     if g_traceFileStat != 0 {
         fprintf(
             stderr,
-            b"Trace:FileStat: %*s> \0" as *const u8 as *const core::ffi::c_char,
+            c"Trace:FileStat: %*s> ".as_ptr(),
             g_traceDepth,
-            b"\0" as *const u8 as *const core::ffi::c_char,
+            c"".as_ptr(),
         );
-        fprintf(
-            stderr,
-            b"UTIL_stat(%d, %s)\0" as *const u8 as *const core::ffi::c_char,
-            fd,
-            filename,
-        );
-        fprintf(stderr, b"\n\0" as *const u8 as *const core::ffi::c_char);
+        fprintf(stderr, c"UTIL_stat(%d, %s)".as_ptr(), fd, filename);
+        fprintf(stderr, c"\n".as_ptr());
         g_traceDepth += 1;
     }
     if fd >= 0 {
@@ -182,9 +166,9 @@ pub unsafe fn UTIL_fstat(
         g_traceDepth -= 1;
         fprintf(
             stderr,
-            b"Trace:FileStat: %*s< %d\n\0" as *const u8 as *const core::ffi::c_char,
+            c"Trace:FileStat: %*s< %d\n".as_ptr(),
             g_traceDepth,
-            b"\0" as *const u8 as *const core::ffi::c_char,
+            c"".as_ptr(),
             ret,
         );
     }
@@ -202,32 +186,24 @@ pub unsafe fn UTIL_isFdRegularFile(fd: core::ffi::c_int) -> core::ffi::c_int {
     if g_traceFileStat != 0 {
         fprintf(
             stderr,
-            b"Trace:FileStat: %*s> \0" as *const u8 as *const core::ffi::c_char,
+            c"Trace:FileStat: %*s> ".as_ptr(),
             g_traceDepth,
-            b"\0" as *const u8 as *const core::ffi::c_char,
+            c"".as_ptr(),
         );
-        fprintf(
-            stderr,
-            b"UTIL_isFdRegularFile(%d)\0" as *const u8 as *const core::ffi::c_char,
-            fd,
-        );
-        fprintf(stderr, b"\n\0" as *const u8 as *const core::ffi::c_char);
+        fprintf(stderr, c"UTIL_isFdRegularFile(%d)".as_ptr(), fd);
+        fprintf(stderr, c"\n".as_ptr());
         g_traceDepth += 1;
     }
     ret = (fd >= 0
-        && UTIL_fstat(
-            fd,
-            b"\0" as *const u8 as *const core::ffi::c_char,
-            &mut statbuf,
-        ) != 0
+        && UTIL_fstat(fd, c"".as_ptr(), &mut statbuf) != 0
         && UTIL_isRegularFileStat(&statbuf) != 0) as core::ffi::c_int;
     if g_traceFileStat != 0 {
         g_traceDepth -= 1;
         fprintf(
             stderr,
-            b"Trace:FileStat: %*s< %d\n\0" as *const u8 as *const core::ffi::c_char,
+            c"Trace:FileStat: %*s< %d\n".as_ptr(),
             g_traceDepth,
-            b"\0" as *const u8 as *const core::ffi::c_char,
+            c"".as_ptr(),
             ret,
         );
     }
@@ -239,16 +215,12 @@ pub unsafe fn UTIL_isRegularFile(infilename: *const core::ffi::c_char) -> core::
     if g_traceFileStat != 0 {
         fprintf(
             stderr,
-            b"Trace:FileStat: %*s> \0" as *const u8 as *const core::ffi::c_char,
+            c"Trace:FileStat: %*s> ".as_ptr(),
             g_traceDepth,
-            b"\0" as *const u8 as *const core::ffi::c_char,
+            c"".as_ptr(),
         );
-        fprintf(
-            stderr,
-            b"UTIL_isRegularFile(%s)\0" as *const u8 as *const core::ffi::c_char,
-            infilename,
-        );
-        fprintf(stderr, b"\n\0" as *const u8 as *const core::ffi::c_char);
+        fprintf(stderr, c"UTIL_isRegularFile(%s)".as_ptr(), infilename);
+        fprintf(stderr, c"\n".as_ptr());
         g_traceDepth += 1;
     }
     ret = (UTIL_stat(infilename, &mut statbuf) != 0 && UTIL_isRegularFileStat(&statbuf) != 0)
@@ -257,9 +229,9 @@ pub unsafe fn UTIL_isRegularFile(infilename: *const core::ffi::c_char) -> core::
         g_traceDepth -= 1;
         fprintf(
             stderr,
-            b"Trace:FileStat: %*s< %d\n\0" as *const u8 as *const core::ffi::c_char,
+            c"Trace:FileStat: %*s< %d\n".as_ptr(),
             g_traceDepth,
-            b"\0" as *const u8 as *const core::ffi::c_char,
+            c"".as_ptr(),
             ret,
         );
     }
@@ -287,17 +259,17 @@ pub unsafe fn UTIL_fchmod(
     if g_traceFileStat != 0 {
         fprintf(
             stderr,
-            b"Trace:FileStat: %*s> \0" as *const u8 as *const core::ffi::c_char,
+            c"Trace:FileStat: %*s> ".as_ptr(),
             g_traceDepth,
-            b"\0" as *const u8 as *const core::ffi::c_char,
+            c"".as_ptr(),
         );
         fprintf(
             stderr,
-            b"UTIL_chmod(%s, %#4o)\0" as *const u8 as *const core::ffi::c_char,
+            c"UTIL_chmod(%s, %#4o)".as_ptr(),
             filename,
             permissions as core::ffi::c_uint,
         );
-        fprintf(stderr, b"\n\0" as *const u8 as *const core::ffi::c_char);
+        fprintf(stderr, c"\n".as_ptr());
         g_traceDepth += 1;
     }
     if statbuf.is_null() {
@@ -306,9 +278,9 @@ pub unsafe fn UTIL_fchmod(
                 g_traceDepth -= 1;
                 fprintf(
                     stderr,
-                    b"Trace:FileStat: %*s< %d\n\0" as *const u8 as *const core::ffi::c_char,
+                    c"Trace:FileStat: %*s< %d\n".as_ptr(),
                     g_traceDepth,
-                    b"\0" as *const u8 as *const core::ffi::c_char,
+                    c"".as_ptr(),
                     0,
                 );
             }
@@ -321,9 +293,9 @@ pub unsafe fn UTIL_fchmod(
             g_traceDepth -= 1;
             fprintf(
                 stderr,
-                b"Trace:FileStat: %*s< %d\n\0" as *const u8 as *const core::ffi::c_char,
+                c"Trace:FileStat: %*s< %d\n".as_ptr(),
                 g_traceDepth,
-                b"\0" as *const u8 as *const core::ffi::c_char,
+                c"".as_ptr(),
                 0,
             );
         }
@@ -334,12 +306,12 @@ pub unsafe fn UTIL_fchmod(
         if g_traceFileStat != 0 {
             fprintf(
                 stderr,
-                b"Trace:FileStat: %*s> \0" as *const u8 as *const core::ffi::c_char,
+                c"Trace:FileStat: %*s> ".as_ptr(),
                 g_traceDepth,
-                b"\0" as *const u8 as *const core::ffi::c_char,
+                c"".as_ptr(),
             );
-            fprintf(stderr, b"fchmod\0" as *const u8 as *const core::ffi::c_char);
-            fprintf(stderr, b"\n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"fchmod".as_ptr());
+            fprintf(stderr, c"\n".as_ptr());
             g_traceDepth += 1;
         }
         ret = fchmod(fd, permissions);
@@ -347,9 +319,9 @@ pub unsafe fn UTIL_fchmod(
             g_traceDepth -= 1;
             fprintf(
                 stderr,
-                b"Trace:FileStat: %*s< %d\n\0" as *const u8 as *const core::ffi::c_char,
+                c"Trace:FileStat: %*s< %d\n".as_ptr(),
                 g_traceDepth,
-                b"\0" as *const u8 as *const core::ffi::c_char,
+                c"".as_ptr(),
                 ret,
             );
         }
@@ -357,9 +329,9 @@ pub unsafe fn UTIL_fchmod(
             g_traceDepth -= 1;
             fprintf(
                 stderr,
-                b"Trace:FileStat: %*s< %d\n\0" as *const u8 as *const core::ffi::c_char,
+                c"Trace:FileStat: %*s< %d\n".as_ptr(),
                 g_traceDepth,
-                b"\0" as *const u8 as *const core::ffi::c_char,
+                c"".as_ptr(),
                 ret,
             );
         }
@@ -369,12 +341,12 @@ pub unsafe fn UTIL_fchmod(
         if g_traceFileStat != 0 {
             fprintf(
                 stderr,
-                b"Trace:FileStat: %*s> \0" as *const u8 as *const core::ffi::c_char,
+                c"Trace:FileStat: %*s> ".as_ptr(),
                 g_traceDepth,
-                b"\0" as *const u8 as *const core::ffi::c_char,
+                c"".as_ptr(),
             );
-            fprintf(stderr, b"chmod\0" as *const u8 as *const core::ffi::c_char);
-            fprintf(stderr, b"\n\0" as *const u8 as *const core::ffi::c_char);
+            fprintf(stderr, c"chmod".as_ptr());
+            fprintf(stderr, c"\n".as_ptr());
             g_traceDepth += 1;
         }
         ret_0 = chmod(filename, permissions);
@@ -382,9 +354,9 @@ pub unsafe fn UTIL_fchmod(
             g_traceDepth -= 1;
             fprintf(
                 stderr,
-                b"Trace:FileStat: %*s< %d\n\0" as *const u8 as *const core::ffi::c_char,
+                c"Trace:FileStat: %*s< %d\n".as_ptr(),
                 g_traceDepth,
-                b"\0" as *const u8 as *const core::ffi::c_char,
+                c"".as_ptr(),
                 ret_0,
             );
         }
@@ -392,9 +364,9 @@ pub unsafe fn UTIL_fchmod(
             g_traceDepth -= 1;
             fprintf(
                 stderr,
-                b"Trace:FileStat: %*s< %d\n\0" as *const u8 as *const core::ffi::c_char,
+                c"Trace:FileStat: %*s< %d\n".as_ptr(),
                 g_traceDepth,
-                b"\0" as *const u8 as *const core::ffi::c_char,
+                c"".as_ptr(),
                 ret_0,
             );
         }
@@ -409,16 +381,12 @@ pub unsafe fn UTIL_utime(
     if g_traceFileStat != 0 {
         fprintf(
             stderr,
-            b"Trace:FileStat: %*s> \0" as *const u8 as *const core::ffi::c_char,
+            c"Trace:FileStat: %*s> ".as_ptr(),
             g_traceDepth,
-            b"\0" as *const u8 as *const core::ffi::c_char,
+            c"".as_ptr(),
         );
-        fprintf(
-            stderr,
-            b"UTIL_utime(%s)\0" as *const u8 as *const core::ffi::c_char,
-            filename,
-        );
-        fprintf(stderr, b"\n\0" as *const u8 as *const core::ffi::c_char);
+        fprintf(stderr, c"UTIL_utime(%s)".as_ptr(), filename);
+        fprintf(stderr, c"\n".as_ptr());
         g_traceDepth += 1;
     }
     let mut timebuf: [timespec; 2] = [{
@@ -439,9 +407,9 @@ pub unsafe fn UTIL_utime(
         g_traceDepth -= 1;
         fprintf(
             stderr,
-            b"Trace:FileStat: %*s< %d\n\0" as *const u8 as *const core::ffi::c_char,
+            c"Trace:FileStat: %*s< %d\n".as_ptr(),
             g_traceDepth,
-            b"\0" as *const u8 as *const core::ffi::c_char,
+            c"".as_ptr(),
             ret,
         );
     }
@@ -488,17 +456,12 @@ pub unsafe fn UTIL_setFDStat(
     if g_traceFileStat != 0 {
         fprintf(
             stderr,
-            b"Trace:FileStat: %*s> \0" as *const u8 as *const core::ffi::c_char,
+            c"Trace:FileStat: %*s> ".as_ptr(),
             g_traceDepth,
-            b"\0" as *const u8 as *const core::ffi::c_char,
+            c"".as_ptr(),
         );
-        fprintf(
-            stderr,
-            b"UTIL_setFileStat(%d, %s)\0" as *const u8 as *const core::ffi::c_char,
-            fd,
-            filename,
-        );
-        fprintf(stderr, b"\n\0" as *const u8 as *const core::ffi::c_char);
+        fprintf(stderr, c"UTIL_setFileStat(%d, %s)".as_ptr(), fd, filename);
+        fprintf(stderr, c"\n".as_ptr());
         g_traceDepth += 1;
     }
     if UTIL_fstat(fd, filename, &mut curStatBuf) == 0 || UTIL_isRegularFileStat(&curStatBuf) == 0 {
@@ -506,9 +469,9 @@ pub unsafe fn UTIL_setFDStat(
             g_traceDepth -= 1;
             fprintf(
                 stderr,
-                b"Trace:FileStat: %*s< %d\n\0" as *const u8 as *const core::ffi::c_char,
+                c"Trace:FileStat: %*s< %d\n".as_ptr(),
                 g_traceDepth,
-                b"\0" as *const u8 as *const core::ffi::c_char,
+                c"".as_ptr(),
                 -(1),
             );
         }
@@ -543,9 +506,9 @@ pub unsafe fn UTIL_setFDStat(
         g_traceDepth -= 1;
         fprintf(
             stderr,
-            b"Trace:FileStat: %*s< %d\n\0" as *const u8 as *const core::ffi::c_char,
+            c"Trace:FileStat: %*s< %d\n".as_ptr(),
             g_traceDepth,
-            b"\0" as *const u8 as *const core::ffi::c_char,
+            c"".as_ptr(),
             -res,
         );
     }
@@ -582,16 +545,12 @@ pub unsafe fn UTIL_isDirectory(infilename: *const core::ffi::c_char) -> core::ff
     if g_traceFileStat != 0 {
         fprintf(
             stderr,
-            b"Trace:FileStat: %*s> \0" as *const u8 as *const core::ffi::c_char,
+            c"Trace:FileStat: %*s> ".as_ptr(),
             g_traceDepth,
-            b"\0" as *const u8 as *const core::ffi::c_char,
+            c"".as_ptr(),
         );
-        fprintf(
-            stderr,
-            b"UTIL_isDirectory(%s)\0" as *const u8 as *const core::ffi::c_char,
-            infilename,
-        );
-        fprintf(stderr, b"\n\0" as *const u8 as *const core::ffi::c_char);
+        fprintf(stderr, c"UTIL_isDirectory(%s)".as_ptr(), infilename);
+        fprintf(stderr, c"\n".as_ptr());
         g_traceDepth += 1;
     }
     ret = (UTIL_stat(infilename, &mut statbuf) != 0 && UTIL_isDirectoryStat(&statbuf) != 0)
@@ -600,9 +559,9 @@ pub unsafe fn UTIL_isDirectory(infilename: *const core::ffi::c_char) -> core::ff
         g_traceDepth -= 1;
         fprintf(
             stderr,
-            b"Trace:FileStat: %*s< %d\n\0" as *const u8 as *const core::ffi::c_char,
+            c"Trace:FileStat: %*s< %d\n".as_ptr(),
             g_traceDepth,
-            b"\0" as *const u8 as *const core::ffi::c_char,
+            c"".as_ptr(),
             ret,
         );
     }
@@ -613,15 +572,12 @@ pub unsafe fn UTIL_isDirectoryStat(statbuf: *const stat_t) -> core::ffi::c_int {
     if g_traceFileStat != 0 {
         fprintf(
             stderr,
-            b"Trace:FileStat: %*s> \0" as *const u8 as *const core::ffi::c_char,
+            c"Trace:FileStat: %*s> ".as_ptr(),
             g_traceDepth,
-            b"\0" as *const u8 as *const core::ffi::c_char,
+            c"".as_ptr(),
         );
-        fprintf(
-            stderr,
-            b"UTIL_isDirectoryStat()\0" as *const u8 as *const core::ffi::c_char,
-        );
-        fprintf(stderr, b"\n\0" as *const u8 as *const core::ffi::c_char);
+        fprintf(stderr, c"UTIL_isDirectoryStat()".as_ptr());
+        fprintf(stderr, c"\n".as_ptr());
         g_traceDepth += 1;
     }
     ret = (((*statbuf).st_mode & __S_IFMT as __mode_t == 0o40000 as core::ffi::c_int as __mode_t)
@@ -631,9 +587,9 @@ pub unsafe fn UTIL_isDirectoryStat(statbuf: *const stat_t) -> core::ffi::c_int {
         g_traceDepth -= 1;
         fprintf(
             stderr,
-            b"Trace:FileStat: %*s< %d\n\0" as *const u8 as *const core::ffi::c_char,
+            c"Trace:FileStat: %*s< %d\n".as_ptr(),
             g_traceDepth,
-            b"\0" as *const u8 as *const core::ffi::c_char,
+            c"".as_ptr(),
             ret,
         );
     }
@@ -658,17 +614,12 @@ pub unsafe fn UTIL_isSameFile(
     if g_traceFileStat != 0 {
         fprintf(
             stderr,
-            b"Trace:FileStat: %*s> \0" as *const u8 as *const core::ffi::c_char,
+            c"Trace:FileStat: %*s> ".as_ptr(),
             g_traceDepth,
-            b"\0" as *const u8 as *const core::ffi::c_char,
+            c"".as_ptr(),
         );
-        fprintf(
-            stderr,
-            b"UTIL_isSameFile(%s, %s)\0" as *const u8 as *const core::ffi::c_char,
-            fName1,
-            fName2,
-        );
-        fprintf(stderr, b"\n\0" as *const u8 as *const core::ffi::c_char);
+        fprintf(stderr, c"UTIL_isSameFile(%s, %s)".as_ptr(), fName1, fName2);
+        fprintf(stderr, c"\n".as_ptr());
         g_traceDepth += 1;
     }
     let mut file1Stat = stat {
@@ -731,9 +682,9 @@ pub unsafe fn UTIL_isSameFile(
         g_traceDepth -= 1;
         fprintf(
             stderr,
-            b"Trace:FileStat: %*s< %d\n\0" as *const u8 as *const core::ffi::c_char,
+            c"Trace:FileStat: %*s< %d\n".as_ptr(),
             g_traceDepth,
-            b"\0" as *const u8 as *const core::ffi::c_char,
+            c"".as_ptr(),
             ret,
         );
     }
@@ -751,17 +702,17 @@ pub unsafe fn UTIL_isSameFileStat(
     if g_traceFileStat != 0 {
         fprintf(
             stderr,
-            b"Trace:FileStat: %*s> \0" as *const u8 as *const core::ffi::c_char,
+            c"Trace:FileStat: %*s> ".as_ptr(),
             g_traceDepth,
-            b"\0" as *const u8 as *const core::ffi::c_char,
+            c"".as_ptr(),
         );
         fprintf(
             stderr,
-            b"UTIL_isSameFileStat(%s, %s)\0" as *const u8 as *const core::ffi::c_char,
+            c"UTIL_isSameFileStat(%s, %s)".as_ptr(),
             fName1,
             fName2,
         );
-        fprintf(stderr, b"\n\0" as *const u8 as *const core::ffi::c_char);
+        fprintf(stderr, c"\n".as_ptr());
         g_traceDepth += 1;
     }
     ret = ((*file1Stat).st_dev == (*file2Stat).st_dev && (*file1Stat).st_ino == (*file2Stat).st_ino)
@@ -770,9 +721,9 @@ pub unsafe fn UTIL_isSameFileStat(
         g_traceDepth -= 1;
         fprintf(
             stderr,
-            b"Trace:FileStat: %*s< %d\n\0" as *const u8 as *const core::ffi::c_char,
+            c"Trace:FileStat: %*s< %d\n".as_ptr(),
             g_traceDepth,
-            b"\0" as *const u8 as *const core::ffi::c_char,
+            c"".as_ptr(),
             ret,
         );
     }
@@ -782,16 +733,12 @@ pub unsafe fn UTIL_isFIFO(infilename: *const core::ffi::c_char) -> core::ffi::c_
     if g_traceFileStat != 0 {
         fprintf(
             stderr,
-            b"Trace:FileStat: %*s> \0" as *const u8 as *const core::ffi::c_char,
+            c"Trace:FileStat: %*s> ".as_ptr(),
             g_traceDepth,
-            b"\0" as *const u8 as *const core::ffi::c_char,
+            c"".as_ptr(),
         );
-        fprintf(
-            stderr,
-            b"UTIL_isFIFO(%s)\0" as *const u8 as *const core::ffi::c_char,
-            infilename,
-        );
-        fprintf(stderr, b"\n\0" as *const u8 as *const core::ffi::c_char);
+        fprintf(stderr, c"UTIL_isFIFO(%s)".as_ptr(), infilename);
+        fprintf(stderr, c"\n".as_ptr());
         g_traceDepth += 1;
     }
     let mut statbuf = stat {
@@ -825,9 +772,9 @@ pub unsafe fn UTIL_isFIFO(infilename: *const core::ffi::c_char) -> core::ffi::c_
             g_traceDepth -= 1;
             fprintf(
                 stderr,
-                b"Trace:FileStat: %*s< %d\n\0" as *const u8 as *const core::ffi::c_char,
+                c"Trace:FileStat: %*s< %d\n".as_ptr(),
                 g_traceDepth,
-                b"\0" as *const u8 as *const core::ffi::c_char,
+                c"".as_ptr(),
                 1,
             );
         }
@@ -837,9 +784,9 @@ pub unsafe fn UTIL_isFIFO(infilename: *const core::ffi::c_char) -> core::ffi::c_
         g_traceDepth -= 1;
         fprintf(
             stderr,
-            b"Trace:FileStat: %*s< %d\n\0" as *const u8 as *const core::ffi::c_char,
+            c"Trace:FileStat: %*s< %d\n".as_ptr(),
             g_traceDepth,
-            b"\0" as *const u8 as *const core::ffi::c_char,
+            c"".as_ptr(),
             0,
         );
     }
@@ -855,51 +802,39 @@ pub unsafe fn UTIL_isFileDescriptorPipe(filename: *const core::ffi::c_char) -> c
     if g_traceFileStat != 0 {
         fprintf(
             stderr,
-            b"Trace:FileStat: %*s> \0" as *const u8 as *const core::ffi::c_char,
+            c"Trace:FileStat: %*s> ".as_ptr(),
             g_traceDepth,
-            b"\0" as *const u8 as *const core::ffi::c_char,
+            c"".as_ptr(),
         );
-        fprintf(
-            stderr,
-            b"UTIL_isFileDescriptorPipe(%s)\0" as *const u8 as *const core::ffi::c_char,
-            filename,
-        );
-        fprintf(stderr, b"\n\0" as *const u8 as *const core::ffi::c_char);
+        fprintf(stderr, c"UTIL_isFileDescriptorPipe(%s)".as_ptr(), filename);
+        fprintf(stderr, c"\n".as_ptr());
         g_traceDepth += 1;
     }
     if *filename.offset(0) as core::ffi::c_int == '/' as i32
-        && strncmp(
-            filename,
-            b"/dev/fd/\0" as *const u8 as *const core::ffi::c_char,
-            8,
-        ) == 0
+        && strncmp(filename, c"/dev/fd/".as_ptr(), 8) == 0
     {
         if g_traceFileStat != 0 {
             g_traceDepth -= 1;
             fprintf(
                 stderr,
-                b"Trace:FileStat: %*s< %d\n\0" as *const u8 as *const core::ffi::c_char,
+                c"Trace:FileStat: %*s< %d\n".as_ptr(),
                 g_traceDepth,
-                b"\0" as *const u8 as *const core::ffi::c_char,
+                c"".as_ptr(),
                 1,
             );
         }
         return 1;
     }
     if *filename.offset(0) as core::ffi::c_int == '/' as i32
-        && strncmp(
-            filename,
-            b"/proc/self/fd/\0" as *const u8 as *const core::ffi::c_char,
-            14,
-        ) == 0
+        && strncmp(filename, c"/proc/self/fd/".as_ptr(), 14) == 0
     {
         if g_traceFileStat != 0 {
             g_traceDepth -= 1;
             fprintf(
                 stderr,
-                b"Trace:FileStat: %*s< %d\n\0" as *const u8 as *const core::ffi::c_char,
+                c"Trace:FileStat: %*s< %d\n".as_ptr(),
                 g_traceDepth,
-                b"\0" as *const u8 as *const core::ffi::c_char,
+                c"".as_ptr(),
                 1,
             );
         }
@@ -909,9 +844,9 @@ pub unsafe fn UTIL_isFileDescriptorPipe(filename: *const core::ffi::c_char) -> c
         g_traceDepth -= 1;
         fprintf(
             stderr,
-            b"Trace:FileStat: %*s< %d\n\0" as *const u8 as *const core::ffi::c_char,
+            c"Trace:FileStat: %*s< %d\n".as_ptr(),
             g_traceDepth,
-            b"\0" as *const u8 as *const core::ffi::c_char,
+            c"".as_ptr(),
             0,
         );
     }
@@ -927,16 +862,12 @@ pub unsafe fn UTIL_isLink(infilename: *const core::ffi::c_char) -> core::ffi::c_
     if g_traceFileStat != 0 {
         fprintf(
             stderr,
-            b"Trace:FileStat: %*s> \0" as *const u8 as *const core::ffi::c_char,
+            c"Trace:FileStat: %*s> ".as_ptr(),
             g_traceDepth,
-            b"\0" as *const u8 as *const core::ffi::c_char,
+            c"".as_ptr(),
         );
-        fprintf(
-            stderr,
-            b"UTIL_isLink(%s)\0" as *const u8 as *const core::ffi::c_char,
-            infilename,
-        );
-        fprintf(stderr, b"\n\0" as *const u8 as *const core::ffi::c_char);
+        fprintf(stderr, c"UTIL_isLink(%s)".as_ptr(), infilename);
+        fprintf(stderr, c"\n".as_ptr());
         g_traceDepth += 1;
     }
     let mut statbuf = stat {
@@ -972,9 +903,9 @@ pub unsafe fn UTIL_isLink(infilename: *const core::ffi::c_char) -> core::ffi::c_
             g_traceDepth -= 1;
             fprintf(
                 stderr,
-                b"Trace:FileStat: %*s< %d\n\0" as *const u8 as *const core::ffi::c_char,
+                c"Trace:FileStat: %*s< %d\n".as_ptr(),
                 g_traceDepth,
-                b"\0" as *const u8 as *const core::ffi::c_char,
+                c"".as_ptr(),
                 1,
             );
         }
@@ -984,9 +915,9 @@ pub unsafe fn UTIL_isLink(infilename: *const core::ffi::c_char) -> core::ffi::c_
         g_traceDepth -= 1;
         fprintf(
             stderr,
-            b"Trace:FileStat: %*s< %d\n\0" as *const u8 as *const core::ffi::c_char,
+            c"Trace:FileStat: %*s< %d\n".as_ptr(),
             g_traceDepth,
-            b"\0" as *const u8 as *const core::ffi::c_char,
+            c"".as_ptr(),
             0,
         );
     }
@@ -1000,23 +931,18 @@ pub unsafe fn UTIL_isConsole(file: *mut FILE) -> core::ffi::c_int {
     if g_traceFileStat != 0 {
         fprintf(
             stderr,
-            b"Trace:FileStat: %*s> \0" as *const u8 as *const core::ffi::c_char,
+            c"Trace:FileStat: %*s> ".as_ptr(),
             g_traceDepth,
-            b"\0" as *const u8 as *const core::ffi::c_char,
+            c"".as_ptr(),
         );
-        fprintf(
-            stderr,
-            b"UTIL_isConsole(%d)\0" as *const u8 as *const core::ffi::c_char,
-            fileno(file),
-        );
-        fprintf(stderr, b"\n\0" as *const u8 as *const core::ffi::c_char);
+        fprintf(stderr, c"UTIL_isConsole(%d)".as_ptr(), fileno(file));
+        fprintf(stderr, c"\n".as_ptr());
         g_traceDepth += 1;
     }
-    if file == stdin && g_fakeStdinIsConsole != 0 {
-        ret = 1;
-    } else if file == stderr && g_fakeStderrIsConsole != 0 {
-        ret = 1;
-    } else if file == stdout && g_fakeStdoutIsConsole != 0 {
+    if (file == stdin && g_fakeStdinIsConsole != 0)
+        || (file == stderr && g_fakeStderrIsConsole != 0)
+        || (file == stdout && g_fakeStdoutIsConsole != 0)
+    {
         ret = 1;
     } else {
         ret = isatty(fileno(file));
@@ -1025,9 +951,9 @@ pub unsafe fn UTIL_isConsole(file: *mut FILE) -> core::ffi::c_int {
         g_traceDepth -= 1;
         fprintf(
             stderr,
-            b"Trace:FileStat: %*s< %d\n\0" as *const u8 as *const core::ffi::c_char,
+            c"Trace:FileStat: %*s< %d\n".as_ptr(),
             g_traceDepth,
-            b"\0" as *const u8 as *const core::ffi::c_char,
+            c"".as_ptr(),
             ret,
         );
     }
@@ -1072,16 +998,12 @@ pub unsafe fn UTIL_getFileSize(infilename: *const core::ffi::c_char) -> u64 {
     if g_traceFileStat != 0 {
         fprintf(
             stderr,
-            b"Trace:FileStat: %*s> \0" as *const u8 as *const core::ffi::c_char,
+            c"Trace:FileStat: %*s> ".as_ptr(),
             g_traceDepth,
-            b"\0" as *const u8 as *const core::ffi::c_char,
+            c"".as_ptr(),
         );
-        fprintf(
-            stderr,
-            b"UTIL_getFileSize(%s)\0" as *const u8 as *const core::ffi::c_char,
-            infilename,
-        );
-        fprintf(stderr, b"\n\0" as *const u8 as *const core::ffi::c_char);
+        fprintf(stderr, c"UTIL_getFileSize(%s)".as_ptr(), infilename);
+        fprintf(stderr, c"\n".as_ptr());
         g_traceDepth += 1;
     }
     if UTIL_stat(infilename, &mut statbuf) == 0 {
@@ -1089,9 +1011,9 @@ pub unsafe fn UTIL_getFileSize(infilename: *const core::ffi::c_char) -> u64 {
             g_traceDepth -= 1;
             fprintf(
                 stderr,
-                b"Trace:FileStat: %*s< %d\n\0" as *const u8 as *const core::ffi::c_char,
+                c"Trace:FileStat: %*s< %d\n".as_ptr(),
                 g_traceDepth,
-                b"\0" as *const u8 as *const core::ffi::c_char,
+                c"".as_ptr(),
                 -(1),
             );
         }
@@ -1102,9 +1024,9 @@ pub unsafe fn UTIL_getFileSize(infilename: *const core::ffi::c_char) -> u64 {
         g_traceDepth -= 1;
         fprintf(
             stderr,
-            b"Trace:FileStat: %*s< %d\n\0" as *const u8 as *const core::ffi::c_char,
+            c"Trace:FileStat: %*s< %d\n".as_ptr(),
             g_traceDepth,
-            b"\0" as *const u8 as *const core::ffi::c_char,
+            c"".as_ptr(),
             size as core::ffi::c_int,
         );
     }
@@ -1129,43 +1051,43 @@ pub unsafe fn UTIL_makeHumanReadableSize(size: u64) -> UTIL_HumanReadableSize_t 
         if size as core::ffi::c_ulonglong >= (1 as core::ffi::c_ulonglong) << 53 {
             hrs.value = size as core::ffi::c_double
                 / ((1 as core::ffi::c_ulonglong) << 20) as core::ffi::c_double;
-            hrs.suffix = b" MiB\0" as *const u8 as *const core::ffi::c_char;
+            hrs.suffix = c" MiB".as_ptr();
             hrs.precision = 2;
         } else {
             hrs.value = size as core::ffi::c_double;
-            hrs.suffix = b" B\0" as *const u8 as *const core::ffi::c_char;
+            hrs.suffix = c" B".as_ptr();
             hrs.precision = 0;
         }
     } else {
         if size as core::ffi::c_ulonglong >= (1 as core::ffi::c_ulonglong) << 60 {
             hrs.value = size as core::ffi::c_double
                 / ((1 as core::ffi::c_ulonglong) << 60) as core::ffi::c_double;
-            hrs.suffix = b" EiB\0" as *const u8 as *const core::ffi::c_char;
+            hrs.suffix = c" EiB".as_ptr();
         } else if size as core::ffi::c_ulonglong >= (1 as core::ffi::c_ulonglong) << 50 {
             hrs.value = size as core::ffi::c_double
                 / ((1 as core::ffi::c_ulonglong) << 50) as core::ffi::c_double;
-            hrs.suffix = b" PiB\0" as *const u8 as *const core::ffi::c_char;
+            hrs.suffix = c" PiB".as_ptr();
         } else if size as core::ffi::c_ulonglong
             >= (1 as core::ffi::c_ulonglong) << 40 as core::ffi::c_int
         {
             hrs.value = size as core::ffi::c_double
                 / ((1 as core::ffi::c_ulonglong) << 40) as core::ffi::c_double;
-            hrs.suffix = b" TiB\0" as *const u8 as *const core::ffi::c_char;
+            hrs.suffix = c" TiB".as_ptr();
         } else if size as core::ffi::c_ulonglong >= (1 as core::ffi::c_ulonglong) << 30 {
             hrs.value = size as core::ffi::c_double
                 / ((1 as core::ffi::c_ulonglong) << 30) as core::ffi::c_double;
-            hrs.suffix = b" GiB\0" as *const u8 as *const core::ffi::c_char;
+            hrs.suffix = c" GiB".as_ptr();
         } else if size as core::ffi::c_ulonglong >= (1 as core::ffi::c_ulonglong) << 20 {
             hrs.value = size as core::ffi::c_double
                 / ((1 as core::ffi::c_ulonglong) << 20) as core::ffi::c_double;
-            hrs.suffix = b" MiB\0" as *const u8 as *const core::ffi::c_char;
+            hrs.suffix = c" MiB".as_ptr();
         } else if size as core::ffi::c_ulonglong >= (1 as core::ffi::c_ulonglong) << 10 {
             hrs.value = size as core::ffi::c_double
                 / ((1 as core::ffi::c_ulonglong) << 10) as core::ffi::c_double;
-            hrs.suffix = b" KiB\0" as *const u8 as *const core::ffi::c_char;
+            hrs.suffix = c" KiB".as_ptr();
         } else {
             hrs.value = size as core::ffi::c_double;
-            hrs.suffix = b" B\0" as *const u8 as *const core::ffi::c_char;
+            hrs.suffix = c" B".as_ptr();
         }
         if hrs.value >= 100.0 || hrs.value as u64 == size {
             hrs.precision = 0;
@@ -1188,16 +1110,12 @@ pub unsafe fn UTIL_getTotalFileSize(
     if g_traceFileStat != 0 {
         fprintf(
             stderr,
-            b"Trace:FileStat: %*s> \0" as *const u8 as *const core::ffi::c_char,
+            c"Trace:FileStat: %*s> ".as_ptr(),
             g_traceDepth,
-            b"\0" as *const u8 as *const core::ffi::c_char,
+            c"".as_ptr(),
         );
-        fprintf(
-            stderr,
-            b"UTIL_getTotalFileSize(%u)\0" as *const u8 as *const core::ffi::c_char,
-            nbFiles,
-        );
-        fprintf(stderr, b"\n\0" as *const u8 as *const core::ffi::c_char);
+        fprintf(stderr, c"UTIL_getTotalFileSize(%u)".as_ptr(), nbFiles);
+        fprintf(stderr, c"\n".as_ptr());
         g_traceDepth += 1;
     }
     n = 0;
@@ -1208,9 +1126,9 @@ pub unsafe fn UTIL_getTotalFileSize(
                 g_traceDepth -= 1;
                 fprintf(
                     stderr,
-                    b"Trace:FileStat: %*s< %d\n\0" as *const u8 as *const core::ffi::c_char,
+                    c"Trace:FileStat: %*s< %d\n".as_ptr(),
                     g_traceDepth,
-                    b"\0" as *const u8 as *const core::ffi::c_char,
+                    c"".as_ptr(),
                     -(1),
                 );
             }
@@ -1223,9 +1141,9 @@ pub unsafe fn UTIL_getTotalFileSize(
         g_traceDepth -= 1;
         fprintf(
             stderr,
-            b"Trace:FileStat: %*s< %d\n\0" as *const u8 as *const core::ffi::c_char,
+            c"Trace:FileStat: %*s< %d\n".as_ptr(),
             g_traceDepth,
-            b"\0" as *const u8 as *const core::ffi::c_char,
+            c"".as_ptr(),
             total as core::ffi::c_int,
         );
     }
@@ -1235,7 +1153,7 @@ unsafe fn UTIL_readFileContent(
     inFile: *mut FILE,
     totalReadPtr: *mut size_t,
 ) -> *mut core::ffi::c_char {
-    let mut bufSize = (64 * ((1) << 10)) as size_t;
+    let mut bufSize = (64 * (1 << 10)) as size_t;
     let mut totalRead = 0;
     let mut bytesRead = 0;
     let mut buf = malloc(bufSize) as *mut core::ffi::c_char;
@@ -1249,19 +1167,16 @@ unsafe fn UTIL_readFileContent(
             bufSize.wrapping_sub(totalRead).wrapping_sub(1),
             inFile,
         );
-        if bytesRead <= 0 {
+        if bytesRead == 0 {
             break;
         }
         totalRead = totalRead.wrapping_add(bytesRead);
-        if bufSize.wrapping_sub(totalRead) < ((1) << 10) as size_t {
+        if bufSize.wrapping_sub(totalRead) < (1 << 10) as size_t {
             if bufSize >= MAX_FILE_OF_FILE_NAMES_SIZE as size_t {
                 free(buf as *mut core::ffi::c_void);
                 return core::ptr::null_mut();
             }
-            let mut newBufSize = bufSize * 2;
-            if newBufSize > MAX_FILE_OF_FILE_NAMES_SIZE as size_t {
-                newBufSize = MAX_FILE_OF_FILE_NAMES_SIZE as size_t;
-            }
+            let newBufSize = Ord::min(bufSize * 2, MAX_FILE_OF_FILE_NAMES_SIZE as size_t);
             let newBuf =
                 realloc(buf as *mut core::ffi::c_void, newBufSize) as *mut core::ffi::c_char;
             if newBuf.is_null() {
@@ -1300,8 +1215,7 @@ unsafe fn UTIL_createLinePointers(
 ) -> *mut *const core::ffi::c_char {
     let mut lineIndex = 0;
     let mut pos = 0;
-    let bufferPtrs =
-        malloc(numLines.wrapping_mul(::core::mem::size_of::<*mut *const core::ffi::c_char>()));
+    let bufferPtrs = malloc(numLines.wrapping_mul(size_of::<*mut *const core::ffi::c_char>()));
     let linePointers = bufferPtrs as *mut *const core::ffi::c_char;
     if bufferPtrs.is_null() {
         return core::ptr::null_mut();
@@ -1369,7 +1283,7 @@ pub unsafe fn UTIL_createFileNamesTable_fromFileList(
     {
         return core::ptr::null_mut();
     }
-    let inFile = fopen(fileList, b"rb\0" as *const u8 as *const core::ffi::c_char);
+    let inFile = fopen(fileList, c"rb".as_ptr());
     if inFile.is_null() {
         return core::ptr::null_mut();
     }
@@ -1396,15 +1310,15 @@ unsafe fn UTIL_assembleFileNamesTable2(
     tableCapacity: size_t,
     buf: *mut core::ffi::c_char,
 ) -> *mut FileNamesTable {
-    let table = malloc(::core::mem::size_of::<FileNamesTable>()) as *mut FileNamesTable;
+    let table = malloc(size_of::<FileNamesTable>()) as *mut FileNamesTable;
     if table.is_null() {
         if g_utilDisplayLevel >= 1 {
             fprintf(
                 stderr,
-                b"Error : %s, %i : %s\0" as *const u8 as *const core::ffi::c_char,
-                b"util.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error : %s, %i : %s".as_ptr(),
+                c"util.c".as_ptr(),
                 803,
-                b"table != NULL\0" as *const u8 as *const core::ffi::c_char,
+                c"table != NULL".as_ptr(),
             );
         }
         exit(1);
@@ -1431,7 +1345,7 @@ pub unsafe fn UTIL_freeFileNamesTable(table: *mut FileNamesTable) {
     free(table as *mut core::ffi::c_void);
 }
 pub unsafe fn UTIL_allocateFileNamesTable(tableSize: size_t) -> *mut FileNamesTable {
-    let fnTable = malloc(tableSize.wrapping_mul(::core::mem::size_of::<*const core::ffi::c_char>()))
+    let fnTable = malloc(tableSize.wrapping_mul(size_of::<*const core::ffi::c_char>()))
         as *mut *const core::ffi::c_char;
     let mut fnt = core::ptr::null_mut::<FileNamesTable>();
     if fnTable.is_null() {
@@ -1485,45 +1399,40 @@ pub unsafe fn UTIL_mergeFileNamesTable(
         if g_utilDisplayLevel >= 1 {
             fprintf(
                 stderr,
-                b"Error : %s, %i : %s\0" as *const u8 as *const core::ffi::c_char,
-                b"util.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error : %s, %i : %s".as_ptr(),
+                c"util.c".as_ptr(),
                 870,
-                b"newTable != NULL\0" as *const u8 as *const core::ffi::c_char,
+                c"newTable != NULL".as_ptr(),
             );
         }
         exit(1);
     }
     newTotalTableSize = (getTotalTableSize(table1)).wrapping_add(getTotalTableSize(table2));
-    buf = calloc(
-        newTotalTableSize,
-        ::core::mem::size_of::<core::ffi::c_char>(),
-    ) as *mut core::ffi::c_char;
+    buf = calloc(newTotalTableSize, size_of::<core::ffi::c_char>()) as *mut core::ffi::c_char;
     if buf.is_null() {
         if g_utilDisplayLevel >= 1 {
             fprintf(
                 stderr,
-                b"Error : %s, %i : %s\0" as *const u8 as *const core::ffi::c_char,
-                b"util.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error : %s, %i : %s".as_ptr(),
+                c"util.c".as_ptr(),
                 875,
-                b"buf != NULL\0" as *const u8 as *const core::ffi::c_char,
+                c"buf != NULL".as_ptr(),
             );
         }
         exit(1);
     }
     (*newTable).buf = buf;
     (*newTable).tableSize = ((*table1).tableSize).wrapping_add((*table2).tableSize);
-    (*newTable).fileNames = calloc(
-        (*newTable).tableSize,
-        ::core::mem::size_of::<*const core::ffi::c_char>(),
-    ) as *mut *const core::ffi::c_char;
+    (*newTable).fileNames = calloc((*newTable).tableSize, size_of::<*const core::ffi::c_char>())
+        as *mut *const core::ffi::c_char;
     if ((*newTable).fileNames).is_null() {
         if g_utilDisplayLevel >= 1 {
             fprintf(
                 stderr,
-                b"Error : %s, %i : %s\0" as *const u8 as *const core::ffi::c_char,
-                b"util.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error : %s, %i : %s".as_ptr(),
+                c"util.c".as_ptr(),
                 880,
-                b"newTable->fileNames != NULL\0" as *const u8 as *const core::ffi::c_char,
+                c"newTable->fileNames != NULL".as_ptr(),
             );
         }
         exit(1);
@@ -1604,14 +1513,8 @@ unsafe fn UTIL_prepareFileList(
         let mut path = core::ptr::null_mut::<core::ffi::c_char>();
         let mut fnameLength: size_t = 0;
         let mut pathLength: size_t = 0;
-        if strcmp(
-            ((*entry).d_name).as_mut_ptr(),
-            b"..\0" as *const u8 as *const core::ffi::c_char,
-        ) == 0
-            || strcmp(
-                ((*entry).d_name).as_mut_ptr(),
-                b".\0" as *const u8 as *const core::ffi::c_char,
-            ) == 0
+        if strcmp(((*entry).d_name).as_mut_ptr(), c"..".as_ptr()) == 0
+            || strcmp(((*entry).d_name).as_mut_ptr(), c".".as_ptr()) == 0
         {
             continue;
         }
@@ -1639,8 +1542,7 @@ unsafe fn UTIL_prepareFileList(
             if g_utilDisplayLevel >= 2 {
                 fprintf(
                     stderr,
-                    b"Warning : %s is a symbolic link, ignoring\n\0" as *const u8
-                        as *const core::ffi::c_char,
+                    c"Warning : %s is a symbolic link, ignoring\n".as_ptr(),
                     path,
                 );
             }
@@ -1715,14 +1617,14 @@ pub unsafe fn UTIL_getFileExtension(
 ) -> *const core::ffi::c_char {
     let extension: *const core::ffi::c_char = strrchr(infilename, '.' as i32);
     if extension.is_null() || extension == infilename {
-        return b"\0" as *const u8 as *const core::ffi::c_char;
+        return c"".as_ptr();
     }
     extension
 }
 unsafe fn pathnameHas2Dots(pathname: *const core::ffi::c_char) -> core::ffi::c_int {
     let mut needle = pathname;
     loop {
-        needle = strstr(needle, b"..\0" as *const u8 as *const core::ffi::c_char);
+        needle = strstr(needle, c"..".as_ptr());
         if needle.is_null() {
             return 0;
         }
@@ -1775,11 +1677,7 @@ unsafe fn getDirMode(dirName: *const core::ffi::c_char) -> mode_t {
         return DIR_DEFAULT_MODE as mode_t;
     }
     if UTIL_isDirectoryStat(&st) == 0 {
-        fprintf(
-            stderr,
-            b"zstd: expected directory: %s\n\0" as *const u8 as *const core::ffi::c_char,
-            dirName,
-        );
+        fprintf(stderr, c"zstd: expected directory: %s\n".as_ptr(), dirName);
         return DIR_DEFAULT_MODE as mode_t;
     }
     st.st_mode as mode_t
@@ -1862,10 +1760,10 @@ unsafe fn mallocAndJoin2Dir(
         if g_utilDisplayLevel >= 1 {
             fprintf(
                 stderr,
-                b"Error : %s, %i : %s\0" as *const u8 as *const core::ffi::c_char,
-                b"util.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error : %s, %i : %s".as_ptr(),
+                c"util.c".as_ptr(),
                 1216,
-                b"outDirBuffer != NULL\0" as *const u8 as *const core::ffi::c_char,
+                c"outDirBuffer != NULL".as_ptr(),
             );
         }
         exit(1);
@@ -1983,17 +1881,16 @@ unsafe fn makeUniqueMirroredDestDirs(
     if nbFile == 0 {
         return;
     }
-    uniqueDirNames =
-        malloc((nbFile as size_t).wrapping_mul(::core::mem::size_of::<*mut core::ffi::c_char>()))
-            as *mut *mut core::ffi::c_char;
+    uniqueDirNames = malloc((nbFile as size_t).wrapping_mul(size_of::<*mut core::ffi::c_char>()))
+        as *mut *mut core::ffi::c_char;
     if uniqueDirNames.is_null() {
         if g_utilDisplayLevel >= 1 {
             fprintf(
                 stderr,
-                b"Error : %s, %i : %s\0" as *const u8 as *const core::ffi::c_char,
-                b"util.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error : %s, %i : %s".as_ptr(),
+                c"util.c".as_ptr(),
                 1317,
-                b"uniqueDirNames != NULL\0" as *const u8 as *const core::ffi::c_char,
+                c"uniqueDirNames != NULL".as_ptr(),
             );
         }
         exit(1);
@@ -2001,7 +1898,7 @@ unsafe fn makeUniqueMirroredDestDirs(
     qsort(
         srcDirNames as *mut core::ffi::c_void,
         nbFile as size_t,
-        ::core::mem::size_of::<*mut core::ffi::c_char>(),
+        size_of::<*mut core::ffi::c_char>(),
         Some(
             compareDir
                 as unsafe extern "C" fn(
@@ -2047,17 +1944,16 @@ pub unsafe fn UTIL_mirrorSourceFilesDirectories(
 ) {
     let mut i = 0;
     let mut validFilenamesNr = 0 as core::ffi::c_uint;
-    let srcFileNames =
-        malloc((nbFile as size_t).wrapping_mul(::core::mem::size_of::<*mut core::ffi::c_char>()))
-            as *mut *mut core::ffi::c_char;
+    let srcFileNames = malloc((nbFile as size_t).wrapping_mul(size_of::<*mut core::ffi::c_char>()))
+        as *mut *mut core::ffi::c_char;
     if srcFileNames.is_null() {
         if g_utilDisplayLevel >= 1 {
             fprintf(
                 stderr,
-                b"Error : %s, %i : %s\0" as *const u8 as *const core::ffi::c_char,
-                b"util.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error : %s, %i : %s".as_ptr(),
+                c"util.c".as_ptr(),
                 1359,
-                b"srcFileNames != NULL\0" as *const u8 as *const core::ffi::c_char,
+                c"srcFileNames != NULL".as_ptr(),
             );
         }
         exit(1);
@@ -2070,10 +1966,10 @@ pub unsafe fn UTIL_mirrorSourceFilesDirectories(
                 if g_utilDisplayLevel >= 1 {
                     fprintf(
                         stderr,
-                        b"Error : %s, %i : %s\0" as *const u8 as *const core::ffi::c_char,
-                        b"util.c\0" as *const u8 as *const core::ffi::c_char,
+                        c"Error : %s, %i : %s".as_ptr(),
+                        c"util.c".as_ptr(),
                         1365,
-                        b"fname != NULL\0" as *const u8 as *const core::ffi::c_char,
+                        c"fname != NULL".as_ptr(),
                     );
                 }
                 exit(1);
@@ -2152,9 +2048,8 @@ pub unsafe fn UTIL_createExpandedFNT(
     let mut ifnNb_0: size_t = 0;
     let mut pos_0: size_t = 0;
     let fntCapacity = nbFiles.wrapping_add(1) as size_t;
-    let fileNamesTable =
-        malloc(fntCapacity.wrapping_mul(::core::mem::size_of::<*const core::ffi::c_char>()))
-            as *mut *const core::ffi::c_char;
+    let fileNamesTable = malloc(fntCapacity.wrapping_mul(size_of::<*const core::ffi::c_char>()))
+        as *mut *const core::ffi::c_char;
     if fileNamesTable.is_null() {
         free(buf as *mut core::ffi::c_void);
         return core::ptr::null_mut();
@@ -2181,10 +2076,10 @@ pub unsafe fn UTIL_expandFNT(fnt: *mut *mut FileNamesTable, followLinks: core::f
         if g_utilDisplayLevel >= 1 {
             fprintf(
                 stderr,
-                b"Error : %s, %i : %s\0" as *const u8 as *const core::ffi::c_char,
-                b"util.c\0" as *const u8 as *const core::ffi::c_char,
+                c"Error : %s, %i : %s".as_ptr(),
+                c"util.c".as_ptr(),
                 1430,
-                b"newFNT != NULL\0" as *const u8 as *const core::ffi::c_char,
+                c"newFNT != NULL".as_ptr(),
             );
         }
         exit(1);
@@ -2196,8 +2091,7 @@ pub unsafe fn UTIL_createFNT_fromROTable(
     filenames: *mut *const core::ffi::c_char,
     nbFilenames: size_t,
 ) -> *mut FileNamesTable {
-    let sizeof_FNTable =
-        nbFilenames.wrapping_mul(::core::mem::size_of::<*const core::ffi::c_char>());
+    let sizeof_FNTable = nbFilenames.wrapping_mul(size_of::<*const core::ffi::c_char>());
     let newFNTable = malloc(sizeof_FNTable) as *mut *const core::ffi::c_char;
     if newFNTable.is_null() {
         return core::ptr::null_mut();

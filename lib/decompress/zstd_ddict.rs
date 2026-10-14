@@ -3,7 +3,7 @@ use core::ptr::NonNull;
 use libc::size_t;
 
 use crate::lib::common::allocations::{ZSTD_customFree, ZSTD_customMalloc};
-use crate::lib::common::error_private::{ERR_isError, Error};
+use crate::lib::common::error_private::Error;
 use crate::lib::decompress::huf_decompress::DTableDesc;
 use crate::lib::decompress::zstd_decompress::ZSTD_loadDEntropy;
 use crate::lib::decompress::{ZSTD_DCtx, ZSTD_entropyDTables_t};
@@ -144,11 +144,7 @@ fn ZSTD_loadEntropy_intoDDict(
 
     ddict.dictID = u32::from_le_bytes(*dict_id);
 
-    let ret = ZSTD_loadDEntropy(&mut ddict.entropy, dict);
-
-    if ERR_isError(ret) {
-        return Err(Error::dictionary_corrupted);
-    }
+    ZSTD_loadDEntropy(&mut ddict.entropy, dict)?;
 
     ddict.entropyPresent = 1;
 
@@ -351,7 +347,7 @@ pub unsafe extern "C" fn ZSTD_sizeof_DDict(ddict: *const ZSTD_DDict) -> size_t {
     if ddict.is_null() {
         return 0;
     }
-    (::core::mem::size_of::<ZSTD_DDict>()).wrapping_add(if !((*ddict).dictBuffer).is_null() {
+    size_of::<ZSTD_DDict>().wrapping_add(if !((*ddict).dictBuffer).is_null() {
         (*ddict).dictSize
     } else {
         0
